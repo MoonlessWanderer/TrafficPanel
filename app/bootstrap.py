@@ -10,6 +10,12 @@ from app.services.auth_service import ensure_admin
 from app.services.runtime_settings import ensure_runtime_settings
 
 
+def _ensure_node_removed_column() -> None:
+    columns = {row[1] for row in db.execute_sql("PRAGMA table_info(node)").fetchall()}
+    if "deleted_at" not in columns:
+        db.execute_sql("ALTER TABLE node ADD COLUMN deleted_at DATETIME")
+
+
 def bootstrap() -> None:
     settings.ensure_directories()
     settings.ensure_secret()
@@ -18,6 +24,7 @@ def bootstrap() -> None:
     try:
         connect_db(settings.database_path)
         db.create_tables(ALL_MODELS, safe=True)
+        _ensure_node_removed_column()
         ensure_runtime_settings()
         ensure_admin()
     except DatabaseError:

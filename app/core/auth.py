@@ -105,6 +105,8 @@ def require_node(request: Request) -> Node:
                 ip_address=client_ip(request),
             )
         raise AppError("unauthorized", "The node id or key is not valid.", 401)
+    if node.deleted_at is not None:
+        raise AppError("node_removed", "This node was removed.", 403)
     if not node.is_enabled:
         raise AppError("node_disabled", "This node is disabled.", 403)
     rate_limiter.check(

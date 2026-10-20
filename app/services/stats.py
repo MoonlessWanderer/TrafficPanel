@@ -528,6 +528,7 @@ def _disk_capacity(nodes: list[Node]) -> dict:
 
 def list_nodes(filters: QueryFilters) -> dict:
     nodes, traffic, resources = matching_nodes(filters)
+    nodes = [node for node in nodes if node.deleted_at is None]
     total = len(nodes)
     start = (filters.page - 1) * filters.page_size
     page = nodes[start : start + filters.page_size]
@@ -549,9 +550,13 @@ def list_nodes(filters: QueryFilters) -> dict:
 
 
 def _status_counts(nodes: list[Node]) -> dict:
-    counts = {"total": len(nodes), "online": 0, "offline": 0, "disabled": 0}
+    counts = {"total": 0, "online": 0, "offline": 0, "disabled": 0}
     for node in nodes:
-        counts[node_status(node)] += 1
+        status = node_status(node)
+        if status == "removed":
+            continue
+        counts["total"] += 1
+        counts[status] += 1
     return counts
 
 
@@ -1156,10 +1161,18 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
             }
         )
     counts = _status_counts(nodes)
+    members = [
+        {"node_id": node.node_id, "name": node.name}
+        for node in Node.select()
+        .join(NodeGroupMembership)
+        .where(NodeGroupMembership.group == group)
+        .order_by(Node.name)
+    ]
     return {
         "group": group_payload(group),
         "range": range_meta(filters),
         "counts": counts,
+        "members": members,
         "traffic": _combine_traffic(nodes, traffic),
         "resources": _combine_resources(nodes, resources),
         "disk": _disk_capacity(nodes),

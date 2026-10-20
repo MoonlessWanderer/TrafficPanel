@@ -329,6 +329,45 @@ def test_wrong_keys_do_not_spend_the_node_budget(client, admin):
     assert blocked.status_code == 429
 
 
+def test_new_node_can_join_a_group(client, admin):
+    group = client.post("/api/v1/groups", json={"name": "edge", "color": "#0f6e6b"}).json()["data"]
+    created = client.post("/api/v1/nodes", json={"name": "web", "group_ids": [group["id"]]})
+    assert created.status_code == 201, created.text
+    assert created.json()["data"]["groups"] == [{"id": group["id"], "name": "edge", "color": "#0f6e6b"}]
+    bare = client.post("/api/v1/nodes", json={"name": "bare"})
+    assert bare.status_code == 201
+    assert bare.json()["data"]["groups"] == []
+
+
+def test_removed_node_keeps_its_history(client, admin):
+    created = _create_node(client, "kept")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    group = client.post("/api/v1/groups", json={"name": "kept-group", "color": "#0f6e6b"}).json()["data"]
+    assert client.post(f"/api/v1/groups/{group['id']}/members", json={"node_ids": [node_id]}).status_code == 200
+    now = datetime.now(timezone.utc)
+    assert _ingest(client, node_id, key, now - timedelta(seconds=30), 1_000, 400, "nonce-kept-0000001").status_code == 200
+    assert _ingest(client, node_id, key, now, 1_600, 700, "nonce-kept-0000002").status_code == 200
+    removed = client.delete(f"/api/v1/nodes/{node_id}")
+    assert removed.status_code == 200, removed.text
+    listed = client.get("/api/v1/nodes").json()["data"]
+    assert node_id not in [item["node_id"] for item in listed]
+    detail = client.get(f"/api/v1/nodes/{node_id}").json()["data"]
+    assert detail["status"] == "removed"
+    stats = client.get(f"/api/v1/nodes/{node_id}/stats?preset=1h").json()["data"]
+    assert stats["traffic"]["rx_bytes"] == 600
+    assert stats["traffic"]["tx_bytes"] == 300
+    dashboard = client.get("/api/v1/dashboard/summary?preset=1h").json()["data"]
+    assert dashboard["traffic"]["rx_bytes"] == 600
+    assert dashboard["nodes"]["total"] == 0
+    group_stats = client.get(f"/api/v1/groups/{group['id']}/stats?preset=1h").json()["data"]
+    assert group_stats["traffic"]["rx_bytes"] == 600
+    assert group_stats["members"][0]["node_id"] == node_id
+    assert group_stats["ranking"][0]["status"] == "removed"
+    assert _ingest(client, node_id, key, now + timedelta(seconds=30), 2_000, 800, "nonce-kept-0000003").status_code == 401
+    assert client.post(f"/api/v1/nodes/{node_id}/enable").status_code == 409
+
+
 def test_node_program_body_is_accepted(client, admin):
     import importlib.util
 

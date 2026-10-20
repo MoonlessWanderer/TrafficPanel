@@ -23,7 +23,7 @@ def _group(group_id: int) -> NodeGroup:
 
 def _nodes(node_ids: list[str]) -> list[Node]:
     unique = list(dict.fromkeys(node_ids))
-    nodes = list(Node.select().where(Node.node_id.in_(unique)))
+    nodes = list(Node.select().where((Node.node_id.in_(unique)) & (Node.deleted_at.is_null(True))))
     found = {node.node_id for node in nodes}
     missing = [node_id for node_id in unique if node_id not in found]
     if missing:

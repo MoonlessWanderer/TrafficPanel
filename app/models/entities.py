@@ -72,6 +72,7 @@ class Node(BaseModel):
     last_tx_bps = DoubleField(null=True)
     created_at = DateTimeField()
     updated_at = DateTimeField()
+    deleted_at = DateTimeField(null=True)
 
     class Meta:
         table_name = "node"

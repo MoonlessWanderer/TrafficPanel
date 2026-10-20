@@ -68,9 +68,28 @@
     fields.forEach((field) => {
       const label = document.createElement("label");
       label.textContent = field.label;
-      const input = document.createElement("input");
-      input.name = field.name;
-      input.value = field.value || "";
+      let input;
+      if (field.type === "select") {
+        input = document.createElement("select");
+        input.name = field.name;
+        if (!field.required) {
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = field.placeholder || "None";
+          input.append(empty);
+        }
+        (field.options || []).forEach((option) => {
+          const item = document.createElement("option");
+          item.value = option.value;
+          item.textContent = option.label;
+          if (String(field.value || "") === String(option.value)) item.selected = true;
+          input.append(item);
+        });
+      } else {
+        input = document.createElement("input");
+        input.name = field.name;
+        input.value = field.value || "";
+      }
       if (field.required) input.required = true;
       label.append(input);
       form.append(label);
@@ -209,7 +228,7 @@
   }
 
   function statusPill(status, stale) {
-    const labels = { online: "Online", offline: "Offline", disabled: "Disabled" };
+    const labels = { online: "Online", offline: "Offline", disabled: "Disabled", removed: "Removed" };
     const extra = stale ? " · delayed" : "";
     return `<span class="pill ${status}">${labels[status] || status}${extra}</span>`;
   }
@@ -224,6 +243,19 @@
 
   function queryString() {
     return params().toString();
+  }
+
+  async function listAllNodes() {
+    const items = [];
+    let page = 1;
+    let total = 0;
+    do {
+      const result = await api(`/api/v1/nodes?page=${page}&page_size=100`);
+      items.push(...result.data);
+      total = result.meta.total;
+      page += 1;
+    } while (items.length < total);
+    return items;
   }
 
   function syncTimeForm() {
@@ -485,15 +517,25 @@
         renderNodes();
       };
       $("#new-node").onclick = async () => {
+        const groups = await api("/api/v1/groups");
         const values = await formBox("New node", [
           { name: "name", label: "Name", required: true },
           { name: "description", label: "Description" },
+          {
+            name: "group_id",
+            label: "Group",
+            type: "select",
+            placeholder: "No group",
+            options: groups.data.map((group) => ({ value: String(group.id), label: group.name })),
+          },
         ]);
         if (!values) return;
+        const body = { name: values.name, description: values.description };
+        if (values.group_id) body.group_ids = [Number(values.group_id)];
         try {
           const result = await api("/api/v1/nodes", {
             method: "POST",
-            body: JSON.stringify({ name: values.name, description: values.description }),
+            body: JSON.stringify(body),
           });
           showKey("Node added.", result.data.node_key, result.data.key_notice, result.data.node_id);
           renderNodes();
@@ -545,6 +587,12 @@
     const subtitle = [info.node_id, `Version ${info.agent_version || "—"}`];
     if (info.os_name) subtitle.push(info.os_name);
     $("#node-sub").textContent = subtitle.join(" · ");
+    const removed = info.status === "removed";
+    ["install-command-btn", "rotate-key", "toggle-node", "revoke-key", "delete-node"].forEach((id) => {
+      const button = document.getElementById(id);
+      if (button) button.hidden = removed;
+    });
+    if (removed) $("#node-sub").textContent = `${info.name} was removed. Its traffic and resource history is kept.`;
     const block = stats.data.traffic;
     const res = stats.data.resources;
     $("#node-cards").innerHTML = [
@@ -611,7 +659,7 @@
       load();
     };
     $("#delete-node").onclick = async () => {
-      if (!await confirmBox("Delete node", "Delete this node and its history?", "Delete", true)) return;
+      if (!await confirmBox("Delete node", "Remove this node from the list? Recorded traffic and resource history stays.", "Delete", true)) return;
       await api(`/api/v1/nodes/${nodeId}`, { method: "DELETE" });
       location.href = "/nodes";
     };
@@ -679,7 +727,20 @@
     };
     setState("");
     $("#add-member").onclick = async () => {
-      const values = await formBox("Add node", [{ name: "node_id", label: "Node ID", required: true }]);
+      const listed = await listAllNodes();
+      const memberIds = new Set((data.members || []).map((item) => item.node_id));
+      const choices = listed.filter((node) => !memberIds.has(node.node_id));
+      if (!choices.length) {
+        toast(listed.length ? "Every node is already in this group." : "Add a node before adding it to this group.");
+        return;
+      }
+      const values = await formBox("Add node", [{
+        name: "node_id",
+        label: "Node",
+        type: "select",
+        required: true,
+        options: choices.map((node) => ({ value: node.node_id, label: node.name })),
+      }]);
       if (!values) return;
       try {
         await api(`/api/v1/groups/${groupId}/members`, { method: "POST", body: JSON.stringify({ node_ids: [values.node_id] }) });

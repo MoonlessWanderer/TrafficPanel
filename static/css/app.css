@@ -191,7 +191,8 @@ main a:hover { text-decoration: underline; }
 .pill::before { content: ""; width: 0.42rem; height: 0.42rem; border-radius: 50%; background: currentColor; }
 .pill.online { color: var(--ok); }
 .pill.offline { color: var(--warn); }
-.pill.disabled, .pill.resolved { color: var(--muted); }
+.pill.disabled, .pill.resolved, .pill.removed { color: var(--muted); }
+.dialog form { display: grid; gap: 0.7rem; }
 .pill.open, .pill.critical { color: var(--danger); }
 
 .filters { padding: 0.85rem; display: grid; gap: 0.7rem; }

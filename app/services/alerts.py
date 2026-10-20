@@ -101,6 +101,9 @@ def scan_connections() -> None:
     now = utcnow()
     offline_after = timedelta(seconds=settings.offline_after_seconds)
     for node in Node.select():
+        if node.deleted_at is not None:
+            recover(node, "offline", "The node was removed.")
+            continue
         if not node.is_enabled:
             recover(node, "offline", "The node is disabled, so the connection alert was closed.")
             continue

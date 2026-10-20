@@ -7,8 +7,9 @@ from peewee import IntegrityError
 from app.core.errors import AppError
 from app.core.security import hash_password, key_prefix, new_node_id, new_node_key
 from app.db.database import db
-from app.models import Node, NodeCredential, NodeGroup, NodeGroupMembership
+from app.models import Alert, Node, NodeCredential, NodeGroup, NodeGroupMembership
 from app.schemas.nodes import NodeCreate, NodeUpdate
+from app.services.alerts import resolve_alert_row
 from app.services.audit import write_audit
 from app.services.present import active_credential, node_payload
 from app.utils.jsonbox import dump_json
@@ -20,6 +21,11 @@ def _get_node(node_id: str) -> Node:
     if node is None:
         raise AppError("not_found", "Node not found.", 404)
     return node
+
+
+def _require_active(node: Node) -> None:
+    if node.deleted_at is not None:
+        raise AppError("node_removed", "This node was removed.", 409)
 
 
 def create_node(data: NodeCreate, *, actor_id: str, ip_address: str | None) -> dict:
@@ -65,6 +71,7 @@ def create_node(data: NodeCreate, *, actor_id: str, ip_address: str | None) -> d
 
 def update_node(node_id: str, data: NodeUpdate, *, actor_id: str, ip_address: str | None) -> dict:
     node = _get_node(node_id)
+    _require_active(node)
     if data.name is not None:
         node.name = data.name
     if data.description is not None:
@@ -87,6 +94,7 @@ def update_node(node_id: str, data: NodeUpdate, *, actor_id: str, ip_address: st
 
 def set_enabled(node_id: str, enabled: bool, *, actor_id: str, ip_address: str | None) -> dict:
     node = _get_node(node_id)
+    _require_active(node)
     node.is_enabled = enabled
     node.updated_at = utcnow()
     node.save()
@@ -103,10 +111,20 @@ def set_enabled(node_id: str, enabled: bool, *, actor_id: str, ip_address: str |
 
 def delete_node(node_id: str, *, actor_id: str, ip_address: str | None) -> None:
     node = _get_node(node_id)
+    _require_active(node)
     identity = node.node_id
     name = node.name
+    now = utcnow()
     with db.atomic():
-        node.delete_instance(recursive=True)
+        NodeCredential.update(is_active=False, revoked_at=now).where(
+            (NodeCredential.node == node) & (NodeCredential.is_active == True)  # noqa: E712
+        ).execute()
+        node.deleted_at = now
+        node.is_enabled = False
+        node.updated_at = now
+        node.save()
+        for alert in Alert.select().where((Alert.node == node) & (Alert.status == "open")):
+            resolve_alert_row(alert, "The node was removed.")
     write_audit(
         actor_type="user",
         actor_id=actor_id,
@@ -120,6 +138,7 @@ def delete_node(node_id: str, *, actor_id: str, ip_address: str | None) -> None:
 
 def rotate_key(node_id: str, *, actor_id: str, ip_address: str | None) -> dict:
     node = _get_node(node_id)
+    _require_active(node)
     plaintext = new_node_key()
     now = utcnow()
     with db.atomic():
@@ -151,6 +170,7 @@ def rotate_key(node_id: str, *, actor_id: str, ip_address: str | None) -> dict:
 
 def revoke_key(node_id: str, *, actor_id: str, ip_address: str | None) -> dict:
     node = _get_node(node_id)
+    _require_active(node)
     credential = active_credential(node)
     if credential is None:
         raise AppError("no_active_key", "This node has no active key.", 409)

@@ -12,6 +12,8 @@ from app.utils.units import format_bps, format_bytes
 
 
 def node_status(node: Node, now=None) -> str:
+    if node.deleted_at is not None:
+        return "removed"
     if not node.is_enabled:
         return "disabled"
     moment = now or utcnow()
