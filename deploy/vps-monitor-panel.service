@@ -4,8 +4,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/usr/local/traffic-panel
-ExecStart=/usr/local/traffic-panel/.venv/bin/python main.py
+WorkingDirectory=/root/traffic-panel
+ExecStart=/root/traffic-panel/.venv/bin/python main.py
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

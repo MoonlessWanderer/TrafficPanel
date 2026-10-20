@@ -7,7 +7,6 @@
 set -euo pipefail
 
 REPO="https://github.com/MoonlessWanderer/TrafficPanel.git"
-DEFAULT_APP_DIR="/usr/local/traffic-panel"
 APP_DIR=""
 APP_USER="trafficpanel"
 APP_GROUP="trafficpanel"
@@ -34,7 +33,7 @@ Usage:
   install.sh uninstall [--yes]
 
 Options for install:
-  --dir PATH        Install directory. Default: /usr/local/traffic-panel
+  --dir PATH        Install directory. Default: ./traffic-panel where the command is run.
   --domain NAME     Public domain. HTTPS is issued for this name.
   --email ADDRESS   Email for the certificate authority. Required with --domain.
   --admin NAME      First admin username.
@@ -123,14 +122,27 @@ bind_app_dir() {
   NGINX_FILE="${APP_DIR}/nginx.conf"
 }
 
+default_install_dir() {
+  local base
+  base="$(pwd -P)"
+  base="${base%/}"
+  if [ "$base" = "/" ]; then
+    printf '%s' "/traffic-panel"
+  else
+    printf '%s' "${base}/traffic-panel"
+  fi
+}
+
 choose_install_dir() {
   if [ -z "$APP_DIR" ]; then
+    local default
+    default="$(default_install_dir)"
     if [ -r /dev/tty ]; then
       local entered
-      entered="$(prompt "Install directory [${DEFAULT_APP_DIR}]: ")"
-      APP_DIR="${entered:-$DEFAULT_APP_DIR}"
+      entered="$(prompt "Install directory [${default}]: ")"
+      APP_DIR="${entered:-$default}"
     else
-      APP_DIR="$DEFAULT_APP_DIR"
+      APP_DIR="$default"
     fi
   fi
   bind_app_dir
@@ -218,6 +230,17 @@ ensure_user() {
   if ! id "$APP_USER" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$APP_USER"
   fi
+}
+
+ensure_app_access() {
+  local dir
+  dir="$(dirname "$APP_DIR")"
+  while [ "$dir" != "/" ]; do
+    if ! runuser -u "$APP_USER" -- test -x "$dir"; then
+      chmod o+x "$dir"
+    fi
+    dir="$(dirname "$dir")"
+  done
 }
 
 run_as_app() {
@@ -471,6 +494,7 @@ install_panel() {
   ensure_user
   git clone --depth 1 "$REPO" "$APP_DIR"
   chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+  ensure_app_access
   run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
   run_as_app "${APP_DIR}/.venv/bin/pip" install --upgrade pip
   run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
@@ -528,6 +552,8 @@ update_panel() {
   installed || die "The panel is not installed."
   [ -d "${APP_DIR}/.git" ] || die "The install directory is not a git checkout."
   ensure_python
+  ensure_user
+  ensure_app_access
   load_state
   local saved
   saved="$(mktemp)"

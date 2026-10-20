@@ -8,7 +8,7 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
 ```
 
-The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It asks for an install directory and uses `/usr/local/traffic-panel` when you leave that answer empty. The panel is not installed under `/opt`. It starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in the directory you chose. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it.
+The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It asks for an install directory. Leaving that answer empty installs `traffic-panel` in the directory where you ran the command, usually `/root/traffic-panel`. The panel is not installed under `/opt`. It starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it. If a parent directory such as `/root` blocks the service user, the installer adds execute permission for others on that parent so the service can enter the panel directory.
 
 - Leave the domain empty to listen on port 8080 without TLS.
 - Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
@@ -35,7 +35,7 @@ sudo bash install.sh uninstall
 Non-interactive install:
 
 ```bash
-sudo bash install.sh install --dir /usr/local/traffic-panel --admin admin --password 'a-long-password' --domain panel.example.com --email you@example.com
+sudo bash install.sh install --admin admin --password 'a-long-password' --domain panel.example.com --email you@example.com
 ```
 
 ## Requirements
