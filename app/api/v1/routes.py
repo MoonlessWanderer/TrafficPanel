@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.core.settings import settings
@@ -24,8 +24,6 @@ from app.services.ingest import ingest_heartbeat, ingest_metrics, note_ingest_er
 from app.services.present import group_payload, node_payload
 from app.services.runtime_settings import snapshot, update_values
 from app.services.stats import (
-    compare_groups,
-    compare_nodes,
     dashboard,
     export_traffic_csv,
     group_detail_stats,
@@ -233,25 +231,13 @@ def summary(request: Request, _user=Depends(require_user)):
 
 
 @router.get("/charts/traffic")
-def charts_traffic(request: Request, mode: str = Query(default="total"), _user=Depends(require_user)):
-    if mode not in {"total", "nodes", "groups"}:
-        raise AppError("invalid_filter", "Unknown chart mode.", 422)
-    return ok(traffic_chart(parse_filters(request), mode))
+def charts_traffic(request: Request, _user=Depends(require_user)):
+    return ok(traffic_chart(parse_filters(request)))
 
 
 @router.get("/charts/resources")
 def charts_resources(request: Request, _user=Depends(require_user)):
     return ok(resource_chart(parse_filters(request)))
-
-
-@router.get("/compare/nodes")
-def get_compare_nodes(request: Request, _user=Depends(require_user)):
-    return ok(compare_nodes(parse_filters(request)))
-
-
-@router.get("/compare/groups")
-def get_compare_groups(request: Request, _user=Depends(require_user)):
-    return ok(compare_groups(parse_filters(request)))
 
 
 @router.get("/alerts")

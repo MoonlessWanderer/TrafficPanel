@@ -476,14 +476,34 @@ def test_removed_node_keeps_its_history(client, admin):
     assert client.get(f"/api/v1/nodes/{node_id}").status_code == 404
     assert client.get(f"/api/v1/nodes/{node_id}/stats?preset=1h").status_code == 404
     dashboard = client.get("/api/v1/dashboard/summary?preset=1h").json()["data"]
-    assert dashboard["traffic"]["has_data"] is False
+    assert dashboard["traffic"]["rx_bytes"] == 600
+    assert dashboard["traffic"]["tx_bytes"] == 300
+    assert dashboard["traffic"]["total_bytes"] == 900
+    assert dashboard["traffic"]["rx_bps_now"] is None
     assert dashboard["nodes"]["total"] == 0
     assert dashboard["top_nodes"] == []
+    assert dashboard["top_groups"][0]["name"] == "kept-group"
+    assert dashboard["top_groups"][0]["total_bytes"] == 900
+    chart = client.get("/api/v1/charts/traffic?preset=1h").json()["data"]
+    assert sum(value or 0 for value in chart["datasets"][0]["data"]) == 600
+    assert sum(value or 0 for value in chart["datasets"][1]["data"]) == 300
     group_stats = client.get(f"/api/v1/groups/{group['id']}/stats?preset=1h").json()["data"]
-    assert group_stats["traffic"]["has_data"] is False
+    assert group_stats["traffic"]["rx_bytes"] == 600
+    assert group_stats["traffic"]["tx_bytes"] == 300
+    assert group_stats["traffic"]["rx_bps_now"] is None
     assert group_stats["members"] == []
     assert group_stats["ranking"] == []
     assert group_stats["counts"]["total"] == 0
+    group_chart = client.get(f"/api/v1/charts/traffic?preset=1h&group_ids={group['id']}").json()["data"]
+    assert sum(value or 0 for value in group_chart["datasets"][0]["data"]) == 600
+    other = _create_node(client, "still")
+    assert _ingest(client, other["node_id"], other["node_key"], now - timedelta(seconds=20), 100, 0, "nonce-still-000001").status_code == 200
+    assert _ingest(client, other["node_id"], other["node_key"], now, 200, 0, "nonce-still-000002").status_code == 200
+    mixed = client.get("/api/v1/dashboard/summary?preset=1h").json()["data"]
+    assert mixed["traffic"]["rx_bytes"] == 700
+    assert [item["name"] for item in mixed["top_nodes"]] == ["still"]
+    assert client.get("/compare", follow_redirects=False).status_code == 302
+    assert client.get("/api/v1/compare/nodes").status_code == 404
     assert _ingest(client, node_id, key, now + timedelta(seconds=30), 2_000, 800, "nonce-kept-0000003").status_code == 401
     assert client.post(f"/api/v1/nodes/{node_id}/enable").status_code == 409
 

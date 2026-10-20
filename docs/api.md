@@ -31,10 +31,8 @@ The session uses an HttpOnly cookie. Changing requests also need the CSRF token 
 - `GET /nodes/{node_id}/stats`
 - `GET /nodes/{node_id}/samples`
 - `GET /groups/{id}/stats`
-- `GET /charts/traffic?mode=total|nodes|groups`
+- `GET /charts/traffic`
 - `GET /charts/resources`
-- `GET /compare/nodes`
-- `GET /compare/groups`
 - `GET /alerts?alert_status=open|resolved`
 - `POST /alerts/{id}/resolve`
 - `GET /export/traffic.csv`

@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from peewee import fn
 
 from app.core.settings import settings
-from app.core.errors import AppError
 from app.db.database import db
 from app.models import (
     Alert,
@@ -73,8 +72,10 @@ def range_meta(filters: QueryFilters, bucket: str | None = None) -> dict:
     return payload
 
 
-def structural_query(filters: QueryFilters):
-    query = Node.select().where(Node.deleted_at.is_null(True))
+def structural_query(filters: QueryFilters, *, include_removed: bool = False):
+    query = Node.select()
+    if not include_removed:
+        query = query.where(Node.deleted_at.is_null(True))
     if filters.node_ids:
         query = query.where(Node.node_id.in_(filters.node_ids))
     if filters.group_ids:
@@ -373,8 +374,8 @@ def _sort_value(node: Node, filters: QueryFilters, traffic: dict | None, reverse
     return (0, -value if reverse else value)
 
 
-def matching_nodes(filters: QueryFilters) -> tuple[list[Node], dict, dict]:
-    nodes = list(structural_query(filters))
+def matching_nodes(filters: QueryFilters, *, include_removed: bool = False) -> tuple[list[Node], dict, dict]:
+    nodes = list(structural_query(filters, include_removed=include_removed))
     ids = [node.id for node in nodes]
     traffic = per_node_traffic(ids, filters.start, filters.end)
     resources = per_node_resources(ids, filters.start, filters.end)
@@ -642,8 +643,9 @@ def _recent_activity(node_ids: list[int], filters: QueryFilters) -> list[dict]:
 
 
 def dashboard(filters: QueryFilters) -> dict:
-    nodes, traffic, resources = matching_nodes(filters)
-    ids = [node.id for node in nodes]
+    nodes, traffic, resources = matching_nodes(filters, include_removed=True)
+    visible = [node for node in nodes if node.deleted_at is None]
+    ids = [node.id for node in visible]
     open_alerts = 0
     if ids:
         open_alerts = (
@@ -657,7 +659,7 @@ def dashboard(filters: QueryFilters) -> dict:
         group_query = group_query.where(NodeGroup.id.in_(filters.group_ids))
     groups = list(group_query)
     ranked_nodes = sorted(
-        nodes,
+        visible,
         key=lambda node: _kind_value(traffic.get(node.id), "total") or -1,
         reverse=True,
     )
@@ -678,7 +680,7 @@ def dashboard(filters: QueryFilters) -> dict:
         )
         if len(top_nodes) == 5:
             break
-    memberships = NodeGroupMembership.select().where(NodeGroupMembership.node.in_(ids or [0]))
+    memberships = NodeGroupMembership.select().where(NodeGroupMembership.node.in_([node.id for node in nodes] or [0]))
     members_by_group: dict[int, list[int]] = defaultdict(list)
     for membership in memberships:
         members_by_group[membership.group_id].append(membership.node_id)
@@ -699,15 +701,15 @@ def dashboard(filters: QueryFilters) -> dict:
             }
         )
     top_groups.sort(key=lambda item: item["total_bytes"], reverse=True)
-    counts = _status_counts(nodes)
+    counts = _status_counts(visible)
     counts["alerting"] = open_alerts
     return {
         "range": range_meta(filters),
         "nodes": counts,
         "groups": {"total": len(groups)},
         "traffic": _combine_traffic(nodes, traffic),
-        "resources": _combine_resources(nodes, resources),
-        "disk": _disk_capacity(nodes),
+        "resources": _combine_resources(visible, resources),
+        "disk": _disk_capacity(visible),
         "top_nodes": top_nodes,
         "top_groups": top_groups[:5],
         "alerts": _recent_alerts(ids, filters),
@@ -1128,14 +1130,8 @@ def _traffic_datasets(columns: dict[str, list]) -> list[dict]:
     ]
 
 
-def traffic_chart(filters: QueryFilters, mode: str = "total") -> dict:
-    nodes, _traffic, _resources = matching_nodes(filters)
-    if mode == "nodes" and len(nodes) > 8:
-        raise AppError("too_many", "Select at most 8 nodes to compare.", 422)
-    if mode == "groups":
-        return _group_traffic_chart(filters, nodes)
-    if mode == "nodes":
-        return _node_traffic_chart(filters, nodes)
+def traffic_chart(filters: QueryFilters) -> dict:
+    nodes, _traffic, _resources = matching_nodes(filters, include_removed=not filters.node_ids)
     bucket, slots = _prepare_chart(filters)
     points = _traffic_points([node.id for node in nodes], slots, bucket, filters.end)
     packed = _series_from_points(slots, points, ["rx", "tx", "rx_bps", "tx_bps"])
@@ -1171,44 +1167,6 @@ def _daily_points(node_ids: list[int], filters: QueryFilters) -> dict[datetime, 
             "count": point["count"],
         }
     return rendered
-
-
-def _node_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
-    bucket, slots = _prepare_chart(filters)
-    labels = [isoformat(slot) for slot in slots]
-    datasets = []
-    for node in nodes:
-        points = _traffic_points([node.id], slots, bucket, filters.end)
-        data = [None if points.get(slot) is None else points[slot]["rx"] + points[slot]["tx"] for slot in slots]
-        label = node.name
-        datasets.append({"key": node.node_id, "label": label, "unit": "bytes", "data": data})
-    return {"range": range_meta(filters, bucket), "labels": labels, "datasets": datasets}
-
-
-def _group_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
-    groups = list(NodeGroup.select())
-    if filters.group_ids:
-        groups = [group for group in groups if group.id in filters.group_ids]
-    if len(groups) > 8:
-        raise AppError("too_many", "Select at most 8 groups to compare.", 422)
-    node_by_id = {node.id: node for node in nodes}
-    memberships = NodeGroupMembership.select()
-    bucket, slots = _prepare_chart(filters)
-    labels = [isoformat(slot) for slot in slots]
-    datasets = []
-    for group in groups:
-        member_ids = [
-            membership.node_id
-            for membership in memberships
-            if membership.group_id == group.id and membership.node_id in node_by_id
-        ]
-        points = _traffic_points(member_ids, slots, bucket, filters.end)
-        data = []
-        for slot in slots:
-            point = points.get(slot)
-            data.append(None if point is None else (point["rx"] or 0) + (point["tx"] or 0))
-        datasets.append({"key": str(group.id), "label": group.name, "unit": "bytes", "color": group.color, "data": data})
-    return {"range": range_meta(filters, bucket), "labels": labels, "datasets": datasets}
 
 
 def _resource_point(cpu, ram, disk, count: int) -> dict:
@@ -1533,13 +1491,12 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
         for membership in NodeGroupMembership.select().where(NodeGroupMembership.group == group)
     ]
     narrowed = QueryFilters(**{**filters.__dict__, "group_ids": [group.id]})
-    nodes, traffic, resources = matching_nodes(narrowed)
+    nodes, traffic, resources = matching_nodes(narrowed, include_removed=True)
     nodes = [node for node in nodes if node.id in member_ids]
+    visible = [node for node in nodes if node.deleted_at is None]
     ranking = []
     known = []
-    for node in nodes:
-        if node.deleted_at is not None:
-            continue
+    for node in visible:
         block = _traffic_public(traffic.get(node.id))
         if block["has_data"]:
             known.append((node, block))
@@ -1558,7 +1515,7 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
                 "cpu_percent": node.last_cpu_percent,
             }
         )
-    counts = _status_counts(nodes)
+    counts = _status_counts(visible)
     members = [
         {"node_id": node.node_id, "name": node.name}
         for node in Node.select()
@@ -1572,52 +1529,10 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
         "counts": counts,
         "members": members,
         "traffic": _combine_traffic(nodes, traffic),
-        "resources": _combine_resources(nodes, resources),
-        "disk": _disk_capacity(nodes),
+        "resources": _combine_resources(visible, resources),
+        "disk": _disk_capacity(visible),
         "ranking": ranking,
     }
-
-
-def compare_nodes(filters: QueryFilters) -> dict:
-    if len(filters.node_ids) < 2:
-        raise AppError("missing_nodes", "Select at least two nodes to compare.", 422)
-    if len(filters.node_ids) > 8:
-        raise AppError("too_many", "Select at most 8 nodes to compare.", 422)
-    nodes, traffic, resources = matching_nodes(filters)
-    items = []
-    for node in nodes:
-        items.append(
-            {
-                "node": node_payload(node, include_groups=False),
-                "traffic": _traffic_public(traffic.get(node.id)),
-                "resources": resources.get(node.id) or {"has_data": False},
-            }
-        )
-    return {"range": range_meta(filters), "items": items, "chart": traffic_chart(filters, mode="nodes")}
-
-
-def compare_groups(filters: QueryFilters) -> dict:
-    if len(filters.group_ids) < 2:
-        raise AppError("missing_groups", "Select at least two groups to compare.", 422)
-    if len(filters.group_ids) > 8:
-        raise AppError("too_many", "Select at most 8 groups to compare.", 422)
-    items = []
-    for group_id in filters.group_ids:
-        group = NodeGroup.get_or_none(NodeGroup.id == group_id)
-        if group is None:
-            continue
-        single = QueryFilters(**{**filters.__dict__, "group_ids": [group_id], "node_ids": []})
-        nodes, traffic, resources = matching_nodes(single)
-        items.append(
-            {
-                "group": group_payload(group, with_counts=True),
-                "traffic": _combine_traffic(nodes, traffic),
-                "resources": _combine_resources(nodes, resources),
-                "disk": _disk_capacity(nodes),
-            }
-        )
-    chart_filters = QueryFilters(**{**filters.__dict__, "node_ids": []})
-    return {"range": range_meta(filters), "items": items, "chart": _group_traffic_chart(chart_filters, matching_nodes(chart_filters)[0])}
 
 
 def list_alerts(filters: QueryFilters, status: str | None) -> dict:

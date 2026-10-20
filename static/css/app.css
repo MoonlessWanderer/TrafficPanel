@@ -201,7 +201,6 @@ main a:hover { text-decoration: underline; }
 }
 .filter-primary { grid-template-columns: minmax(160px, 1.5fr) repeat(3, minmax(120px, 1fr)) auto; }
 .alert-primary { grid-template-columns: minmax(160px, 240px) auto; justify-content: start; }
-.compare-primary { grid-template-columns: 180px minmax(0, 1fr) auto; }
 .filter-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 0.7rem; }
 .filters label, .login-card label, .dialog label {
   display: flex; flex-direction: column; gap: 0.28rem; font-size: 0.78rem; color: var(--muted); font-weight: 500;
@@ -283,10 +282,8 @@ body[data-page="settings"] .time-form { display: none; }
 .backdrop { position: fixed; inset: 0; background: rgba(8, 14, 12, 0.45); z-index: 20; }
 .backdrop[hidden] { display: none; }
 
-.compare-primary { align-items: start; }
 @media (max-width: 1100px) {
   .filter-primary, .filter-grid { grid-template-columns: 1fr 1fr; }
-  .compare-primary { grid-template-columns: 1fr; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .topbar:has(.time-form.custom) { align-items: stretch; }
   .topbar:has(.time-form.custom) .top-start,

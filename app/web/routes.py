@@ -65,8 +65,8 @@ def group_page(group_id: int, request: Request):
 
 
 @router.get("/compare")
-def compare_page(request: Request):
-    return _render(request, "compare.html", "compare")
+def compare_page():
+    return RedirectResponse("/", status_code=302)
 
 
 @router.get("/alerts")

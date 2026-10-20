@@ -550,7 +550,7 @@
     $("#dash-activity").innerHTML = data.activity.length
       ? data.activity.map((item) => feedItem(actionLabels[item.action] || item.action, item.created_at)).join("")
       : `<p class="empty">No activity in this range.</p>`;
-    setState(data.nodes.total ? "" : "No nodes have been added yet.");
+    setState(data.nodes.total || data.traffic?.has_data ? "" : "No nodes have been added yet.");
   }
 
   function readFilterForm(form) {
@@ -768,7 +768,7 @@
     ]);
     const data = stats.data;
     $("#group-title").textContent = data.group.name;
-    $("#group-sub").textContent = data.group.description || "Stats are calculated from the current members.";
+    $("#group-sub").textContent = data.group.description || "Traffic includes members that were later removed.";
     const trafficBlock = data.traffic;
     $("#group-cards").innerHTML = [
       card("Online", data.counts.online, `of ${data.counts.total}`),
@@ -826,72 +826,6 @@
       if (!await confirmBox("Delete group", "Members are kept. Delete this group?", "Delete", true)) return;
       await api(`/api/v1/groups/${groupId}`, { method: "DELETE" });
       location.href = "/groups";
-    };
-  }
-
-  async function loadCompare() {
-    const form = $("#compare-form");
-    const select = $("#compare-select");
-    async function fill() {
-      select.innerHTML = "";
-      if (form.kind.value === "nodes") {
-        const result = await api("/api/v1/nodes?page_size=100");
-        result.data.forEach((node) => {
-          const option = document.createElement("option");
-          option.value = node.node_id;
-          option.textContent = node.name;
-          select.appendChild(option);
-        });
-      } else {
-        const result = await api("/api/v1/groups");
-        result.data.forEach((group) => {
-          const option = document.createElement("option");
-          option.value = group.id;
-          option.textContent = group.name;
-          select.appendChild(option);
-        });
-      }
-    }
-    form.kind.onchange = fill;
-    await fill();
-    form.onsubmit = async (event) => {
-      event.preventDefault();
-      const selected = [...select.selectedOptions].map((option) => option.value);
-      if (selected.length < 2) {
-        toast("Select at least two items.");
-        return;
-      }
-      const next = params();
-      if (form.kind.value === "nodes") {
-        next.delete("group_ids");
-        next.delete("node_ids");
-        selected.forEach((id) => next.append("node_ids", id));
-      } else {
-        next.delete("node_ids");
-        next.delete("group_ids");
-        selected.forEach((id) => next.append("group_ids", id));
-      }
-      history.replaceState(null, "", `${location.pathname}?${next.toString()}`);
-      setState("Loading…");
-      try {
-        const path = form.kind.value === "nodes" ? "/api/v1/compare/nodes" : "/api/v1/compare/groups";
-        const result = await api(`${path}?${next.toString()}`);
-        drawChart("compare-chart", result.data.chart.labels, result.data.chart.datasets, "bytes", result.data.chart.range?.bucket);
-        const comparingNodes = result.data.items.some((item) => item.node);
-        const rows = result.data.items.map((item) => {
-          if (item.node) {
-            const name = item.node.name;
-            const cpu = item.node.cpu_percent == null ? "—" : `${item.node.cpu_percent.toFixed(1)}%`;
-            return `<tr><td>${escapeHtml(name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${cpu}</td></tr>`;
-          }
-          return `<tr><td>${escapeHtml(item.group.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td></tr>`;
-        }).join("");
-        const head = comparingNodes ? "<th>Name</th><th>Traffic</th><th>CPU</th>" : "<th>Name</th><th>Traffic</th>";
-        $("#compare-table").innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
-        setState(result.data.items.some((item) => item.traffic.has_data) ? "" : "No data has been recorded for this range.");
-      } catch (error) {
-        setState(error.message, true);
-      }
     };
   }
 
@@ -966,7 +900,6 @@
       else if (page === "node") await loadNode();
       else if (page === "groups") await loadGroups();
       else if (page === "group") await loadGroup();
-      else if (page === "compare") await loadCompare();
       else if (page === "alerts") await loadAlerts();
       else if (page === "settings") await loadSettings();
     } catch (error) {
