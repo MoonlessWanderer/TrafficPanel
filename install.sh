@@ -742,7 +742,7 @@ install_panel() {
   SSL="no"
   apply_runtime
   ensure_user
-  git clone --depth 1 "$REPO" "$APP_DIR"
+  clone_repo
   chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
   ensure_app_access
   run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
@@ -780,7 +780,7 @@ update_panel() {
   local saved
   saved="$(mktemp)"
   cp "${APP_DIR}/config.py" "$saved"
-  run_as_app git -C "$APP_DIR" fetch --depth 1 origin main
+  git_as_app -C "$APP_DIR" fetch --depth 1 origin main
   run_as_app git -C "$APP_DIR" reset --hard origin/main
   preserve_config "$saved"
   rm -f "$saved"
@@ -1060,8 +1060,63 @@ pause_menu() {
 }
 
 run_action() {
-  ( "$@" ) || true
+  set +e
+  (
+    set -euo pipefail
+    "$@"
+  )
+  set -e
   pause_menu
+}
+
+proxy_url() {
+  printf '%s' "${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}"
+}
+
+git_as_app() {
+  local proxy
+  proxy="$(proxy_url)"
+  if [ -n "$proxy" ]; then
+    run_as_app git -c "http.proxy=${proxy}" "$@"
+  else
+    run_as_app git "$@"
+  fi
+}
+
+clone_once() {
+  local proxy="$1"
+  local attempt
+  for attempt in 1 2 3; do
+    if [ -n "$proxy" ]; then
+      git -c "http.proxy=${proxy}" clone --depth 1 "$REPO" "$APP_DIR" && return 0
+    else
+      env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY \
+        git -c http.proxy= clone --depth 1 "$REPO" "$APP_DIR" && return 0
+    fi
+    rm -rf "$APP_DIR"
+    if [ "$attempt" -lt 3 ]; then
+      echo "GitHub clone failed. Retrying (${attempt}/3)..."
+      sleep 3
+    fi
+  done
+  return 1
+}
+
+clone_repo() {
+  local proxy
+  proxy="$(proxy_url)"
+  if [ -n "$proxy" ] && clone_once "$proxy"; then
+    return 0
+  fi
+  if [ -n "$proxy" ]; then
+    echo "The proxy closed the connection to GitHub. Trying a direct connection."
+    if clone_once ""; then
+      return 0
+    fi
+  elif clone_once ""; then
+    return 0
+  fi
+  die "Could not clone the panel from GitHub. If a proxy is required, it must allow CONNECT to github.com port 443. Choose Install again after that works."
 }
 
 menu_loop() {
