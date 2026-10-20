@@ -23,11 +23,12 @@ from app.models import (
     NodeMetricSample,
     TrafficInterval,
 )
-from app.services.filters import QueryFilters, choose_bucket
+from app.services.aggregates import refresh_five_minute
+from app.services.filters import QueryFilters
 from app.services.nics import counted_interface, counted_sql, is_virtual_interface
 from app.services.present import group_payload, node_payload, node_status, percent, status_cutoff
 from app.utils.jsonbox import load_json
-from app.utils.time import hour_bucket, isoformat, local_day_start
+from app.utils.time import as_utc, five_minute_slots, hour_bucket, isoformat, local_day_start, utcnow
 from app.utils.units import format_bps, format_bytes
 
 SPEED_METHOD = (
@@ -814,31 +815,103 @@ def _raw_points(node_ids: list[int], filters: QueryFilters) -> tuple[list[str], 
     return labels, columns
 
 
+def _chart_bounds(filters: QueryFilters) -> tuple[datetime, datetime]:
+    earliest = utcnow() - timedelta(days=int(settings.five_minute_retention_days))
+    start = max(as_utc(filters.start), earliest)
+    end = as_utc(filters.end)
+    if start >= end:
+        return end, end
+    return start, end
+
+
+def _prepare_five_minute(filters: QueryFilters) -> list[datetime]:
+    start, end = _chart_bounds(filters)
+    if start < end:
+        refresh_five_minute(start, end)
+    return five_minute_slots(start, end)
+
+
+def _five_traffic_points(node_ids: list[int], slots: list[datetime]) -> dict[datetime, dict]:
+    if not node_ids or not slots:
+        return {}
+    ph = _placeholders(len(node_ids))
+    sql = f"""
+        SELECT bucket_start, SUM(rx_bytes), SUM(tx_bytes), SUM(duration_seconds), SUM(sample_count)
+        FROM traffic_five_minute_aggregate
+        WHERE {counted_sql()} AND sample_count > 0
+          AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
+        GROUP BY bucket_start
+    """
+    points: dict[datetime, dict] = {}
+    for bucket, rx, tx, dur, count in db.execute_sql(
+        sql, [slots[0], slots[-1] + timedelta(minutes=5), *node_ids]
+    ).fetchall():
+        duration = float(dur or 0)
+        points[_parse_dt(bucket).replace(microsecond=0)] = {
+            "rx": int(rx or 0),
+            "tx": int(tx or 0),
+            "rx_bps": (int(rx or 0) / duration) if duration else None,
+            "tx_bps": (int(tx or 0) / duration) if duration else None,
+            "count": int(count or 0),
+        }
+    return points
+
+
+def _five_resource_points(node_ids: list[int], slots: list[datetime]) -> dict[datetime, dict]:
+    if not node_ids or not slots:
+        return {}
+    ph = _placeholders(len(node_ids))
+    sql = f"""
+        SELECT bucket_start,
+               SUM(cpu_avg * resource_samples) / SUM(resource_samples),
+               MAX(cpu_max), MIN(cpu_min),
+               SUM(ram_percent_avg * resource_samples) / SUM(resource_samples),
+               SUM(disk_percent_avg * resource_samples) / SUM(resource_samples),
+               SUM(resource_samples)
+        FROM traffic_five_minute_aggregate
+        WHERE interface_name = '*' AND resource_samples > 0
+          AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
+        GROUP BY bucket_start
+    """
+    points: dict[datetime, dict] = {}
+    for bucket, cpu_avg, cpu_max, cpu_min, ram, disk, count in db.execute_sql(
+        sql, [slots[0], slots[-1] + timedelta(minutes=5), *node_ids]
+    ).fetchall():
+        points[_parse_dt(bucket).replace(microsecond=0)] = {
+            "cpu_avg": cpu_avg,
+            "cpu_max": cpu_max,
+            "cpu_min": cpu_min,
+            "ram_percent": ram,
+            "disk_percent": disk,
+            "count": int(count or 0),
+        }
+    return points
+
+
+def _traffic_datasets(columns: dict[str, list]) -> list[dict]:
+    return [
+        {"key": "rx", "label": "RX", "unit": "bytes", "data": columns["rx"]},
+        {"key": "tx", "label": "TX", "unit": "bytes", "data": columns["tx"]},
+        {"key": "rx_bps", "label": "RX speed", "unit": "bps", "data": columns["rx_bps"]},
+        {"key": "tx_bps", "label": "TX speed", "unit": "bps", "data": columns["tx_bps"]},
+    ]
+
+
 def traffic_chart(filters: QueryFilters, mode: str = "total") -> dict:
-    bucket = choose_bucket(filters)
     nodes, _traffic, _resources = matching_nodes(filters)
     if mode == "nodes" and len(nodes) > 8:
         raise AppError("too_many", "Select at most 8 nodes to compare.", 422)
     if mode == "groups":
-        return _group_traffic_chart(filters, nodes, bucket)
+        return _group_traffic_chart(filters, nodes)
     if mode == "nodes":
-        return _node_traffic_chart(filters, nodes, bucket)
-    if bucket == "raw":
-        labels, columns = _raw_points([node.id for node in nodes], filters)
-    else:
-        points = _hourly_points([node.id for node in nodes], filters) if bucket == "hour" else _daily_points([node.id for node in nodes], filters)
-        packed = _series_from_points( _slots(filters, bucket), points, ["rx", "tx", "rx_bps", "tx_bps"])
-        labels = packed["labels"]
-        columns = packed["columns"]
+        return _node_traffic_chart(filters, nodes)
+    slots = _prepare_five_minute(filters)
+    points = _five_traffic_points([node.id for node in nodes], slots)
+    packed = _series_from_points(slots, points, ["rx", "tx", "rx_bps", "tx_bps"])
     return {
-        "range": range_meta(filters, bucket),
-        "labels": labels,
-        "datasets": [
-            {"key": "rx", "label": "RX", "unit": "bytes", "data": columns["rx"]},
-            {"key": "tx", "label": "TX", "unit": "bytes", "data": columns["tx"]},
-            {"key": "rx_bps", "label": "RX speed", "unit": "bps", "data": columns["rx_bps"]},
-            {"key": "tx_bps", "label": "TX speed", "unit": "bps", "data": columns["tx_bps"]},
-        ],
+        "range": range_meta(filters, "5min"),
+        "labels": packed["labels"],
+        "datasets": _traffic_datasets(packed["columns"]),
     }
 
 
@@ -869,22 +942,18 @@ def _daily_points(node_ids: list[int], filters: QueryFilters) -> dict[datetime, 
     return rendered
 
 
-def _node_traffic_chart(filters: QueryFilters, nodes: list[Node], bucket: str) -> dict:
-    slots = _slots(filters, "hour" if bucket == "raw" else bucket)
-    datasets = []
+def _node_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
+    slots = _prepare_five_minute(filters)
     labels = [isoformat(slot) for slot in slots]
+    datasets = []
     for node in nodes:
-        points = _hourly_points([node.id], filters)
-        if bucket == "day":
-            points = _daily_points([node.id], filters)
-            slots = _slots(filters, "day")
-            labels = [isoformat(slot) for slot in slots]
+        points = _five_traffic_points([node.id], slots)
         data = [None if points.get(slot) is None else points[slot]["rx"] + points[slot]["tx"] for slot in slots]
         datasets.append({"key": node.node_id, "label": node.name, "unit": "bytes", "data": data})
-    return {"range": range_meta(filters, bucket), "labels": labels, "datasets": datasets}
+    return {"range": range_meta(filters, "5min"), "labels": labels, "datasets": datasets}
 
 
-def _group_traffic_chart(filters: QueryFilters, nodes: list[Node], bucket: str) -> dict:
+def _group_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
     groups = list(NodeGroup.select())
     if filters.group_ids:
         groups = [group for group in groups if group.id in filters.group_ids]
@@ -892,7 +961,7 @@ def _group_traffic_chart(filters: QueryFilters, nodes: list[Node], bucket: str) 
         raise AppError("too_many", "Select at most 8 groups to compare.", 422)
     node_by_id = {node.id: node for node in nodes}
     memberships = NodeGroupMembership.select()
-    slots = _slots(filters, "hour" if bucket != "day" else "day")
+    slots = _prepare_five_minute(filters)
     labels = [isoformat(slot) for slot in slots]
     datasets = []
     for group in groups:
@@ -901,22 +970,21 @@ def _group_traffic_chart(filters: QueryFilters, nodes: list[Node], bucket: str) 
             for membership in memberships
             if membership.group_id == group.id and membership.node_id in node_by_id
         ]
-        points = _daily_points(member_ids, filters) if bucket == "day" else _hourly_points(member_ids, filters)
+        points = _five_traffic_points(member_ids, slots)
         data = []
         for slot in slots:
             point = points.get(slot)
             data.append(None if point is None else (point["rx"] or 0) + (point["tx"] or 0))
         datasets.append({"key": str(group.id), "label": group.name, "unit": "bytes", "color": group.color, "data": data})
-    return {"range": range_meta(filters, "day" if bucket == "day" else "hour"), "labels": labels, "datasets": datasets}
+    return {"range": range_meta(filters, "5min"), "labels": labels, "datasets": datasets}
 
 
 def resource_chart(filters: QueryFilters) -> dict:
-    bucket = choose_bucket(filters)
     nodes, _traffic, _resources = matching_nodes(filters)
-    ids = [node.id for node in nodes]
-    if bucket == "raw":
-        return _raw_resources(ids, filters)
-    return _bucket_resources(ids, filters, "day" if bucket == "day" else "hour")
+    slots = _prepare_five_minute(filters)
+    points = _five_resource_points([node.id for node in nodes], slots)
+    packed = _series_from_points(slots, points, ["cpu_avg", "cpu_max", "cpu_min", "ram_percent", "disk_percent"])
+    return {"range": range_meta(filters, "5min"), "labels": packed["labels"], "datasets": _resource_datasets(packed["columns"])}
 
 
 def _raw_resources(node_ids: list[int], filters: QueryFilters) -> dict:
@@ -1219,7 +1287,7 @@ def compare_groups(filters: QueryFilters) -> dict:
             }
         )
     chart_filters = QueryFilters(**{**filters.__dict__, "node_ids": []})
-    return {"range": range_meta(filters), "items": items, "chart": _group_traffic_chart(chart_filters, matching_nodes(chart_filters)[0], choose_bucket(filters))}
+    return {"range": range_meta(filters), "items": items, "chart": _group_traffic_chart(chart_filters, matching_nodes(chart_filters)[0])}
 
 
 def list_alerts(filters: QueryFilters, status: str | None) -> dict:

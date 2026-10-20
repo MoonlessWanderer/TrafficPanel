@@ -246,6 +246,8 @@ def test_virtual_interfaces_are_left_out_of_traffic(client, admin):
     assert stats["traffic"]["rx_bytes"] == 500
     assert stats["traffic"]["tx_bytes"] == 300
     assert [item["name"] for item in stats["interfaces"]] == ["eth0"]
+    chart = client.get(f"/api/v1/charts/traffic?preset=1h&node_ids={node_id}").json()["data"]
+    assert [value for value in chart["datasets"][0]["data"] if value] == [500]
 
 
 def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
@@ -267,15 +269,43 @@ def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
     assert chart.status_code == 200, chart.text
     body = chart.json()["data"]
     rx = [value for value in body["datasets"][0]["data"] if value]
-    assert body["range"]["bucket"] == "raw"
+    assert body["range"]["bucket"] == "5min"
     assert len(rx) >= 4
     resources = client.get("/api/v1/charts/resources?preset=24h&node_ids=" + node_id)
     cpu = [value for value in resources.json()["data"]["datasets"][0]["data"] if value is not None]
     assert len(cpu) >= 4
     week = client.get("/api/v1/charts/traffic?preset=7d&node_ids=" + node_id)
-    assert week.json()["data"]["range"]["bucket"] == "hour"
+    assert week.json()["data"]["range"]["bucket"] == "5min"
     week_rx = [value for value in week.json()["data"]["datasets"][0]["data"] if value]
     assert len(week_rx) >= 4
+
+
+def test_five_minute_chart_keeps_one_bucket_and_averages_cpu(client, admin):
+    created = _create_node(client, "bucket")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    moment = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    anchor = moment.replace(minute=(moment.minute // 5) * 5)
+    if (datetime.now(timezone.utc) - anchor).total_seconds() < 45:
+        anchor -= timedelta(minutes=5)
+    assert _ingest(client, node_id, key, anchor + timedelta(seconds=5), 1_000, 1_000, "nonce-bucket-0001", cpu=10).status_code == 200
+    assert _ingest(client, node_id, key, anchor + timedelta(seconds=35), 1_600, 1_250, "nonce-bucket-0002", cpu=30).status_code == 200
+    chart = client.get(f"/api/v1/charts/traffic?preset=1h&node_ids={node_id}")
+    assert chart.status_code == 200, chart.text
+    body = chart.json()["data"]
+    assert body["range"]["preset"] == "1h"
+    assert body["range"]["bucket"] == "5min"
+    assert len(body["labels"]) == 12
+    assert [value for value in body["datasets"][0]["data"] if value] == [600]
+    assert [value for value in body["datasets"][1]["data"] if value] == [250]
+    resources = client.get(f"/api/v1/charts/resources?preset=1h&node_ids={node_id}").json()["data"]
+    cpu = [value for value in resources["datasets"][0]["data"] if value is not None]
+    assert cpu == [20]
+    six = client.get("/api/v1/charts/traffic?preset=6h")
+    assert six.status_code == 200
+    assert len(six.json()["data"]["labels"]) == 72
+    missing = client.get("/api/v1/charts/traffic")
+    assert missing.json()["data"]["range"]["preset"] == "1h"
 
 
 def test_restart_keeps_data(client, admin, tmp_path, monkeypatch):

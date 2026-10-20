@@ -196,6 +196,39 @@ class TrafficInterval(BaseModel):
         )
 
 
+class TrafficFiveMinuteAggregate(BaseModel):
+    node = ForeignKeyField(Node, backref="five_minute_aggregates", on_delete="CASCADE")
+    interface_name = CharField(max_length=64)
+    bucket_start = DateTimeField()
+    rx_bytes = BigIntegerField(default=0)
+    tx_bytes = BigIntegerField(default=0)
+    rx_bps_avg = DoubleField(null=True)
+    tx_bps_avg = DoubleField(null=True)
+    rx_bps_max = DoubleField(null=True)
+    tx_bps_max = DoubleField(null=True)
+    duration_seconds = DoubleField(default=0)
+    sample_count = IntegerField(default=0)
+    cpu_avg = DoubleField(null=True)
+    cpu_max = DoubleField(null=True)
+    cpu_min = DoubleField(null=True)
+    ram_percent_avg = DoubleField(null=True)
+    ram_percent_max = DoubleField(null=True)
+    ram_total_bytes = BigIntegerField(null=True)
+    ram_used_avg = DoubleField(null=True)
+    disk_percent_avg = DoubleField(null=True)
+    disk_percent_max = DoubleField(null=True)
+    disk_total_bytes = BigIntegerField(null=True)
+    disk_used_avg = DoubleField(null=True)
+    resource_samples = IntegerField(default=0)
+
+    class Meta:
+        table_name = "traffic_five_minute_aggregate"
+        indexes = (
+            (("node", "interface_name", "bucket_start"), True),
+            (("bucket_start",), False),
+        )
+
+
 class TrafficHourlyAggregate(BaseModel):
     node = ForeignKeyField(Node, backref="hourly_aggregates", on_delete="CASCADE")
     interface_name = CharField(max_length=64)
@@ -325,6 +358,7 @@ ALL_MODELS = [
     NetworkInterface,
     NetworkCounterSample,
     TrafficInterval,
+    TrafficFiveMinuteAggregate,
     TrafficHourlyAggregate,
     TrafficDailyAggregate,
     Alert,

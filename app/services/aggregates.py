@@ -1,4 +1,4 @@
-"""تجمیع ساعتی و روزانه و نگهداری داده‌ها.
+"""تجمیع پنج‌دقیقه‌ای، ساعتی و روزانه و نگهداری داده‌ها.
 
 ساعت‌های قدیمی‌تر از مرز نگهداری خام دوباره از روی نمونه‌های حذف‌شده محاسبه نمی‌شوند
 تا آمار تاریخی کوچک نشود.
@@ -20,14 +20,34 @@ from app.models import (
     RequestNonce,
     Session,
     TrafficDailyAggregate,
+    TrafficFiveMinuteAggregate,
     TrafficHourlyAggregate,
     TrafficInterval,
 )
 from app.services.alerts import scan_connections
-from app.utils.time import as_utc, hour_bucket, local_day_start, retention_split, utcnow
+from app.utils.time import as_utc, five_minute_bucket, hour_bucket, local_day_start, retention_split, utcnow
 
 _lock = threading.Lock()
 _last_retention: datetime | None = None
+
+
+def _upsert_five_minute(node_id: int, interface_name: str, bucket: datetime, values: dict) -> None:
+    row = TrafficFiveMinuteAggregate.get_or_none(
+        (TrafficFiveMinuteAggregate.node == node_id)
+        & (TrafficFiveMinuteAggregate.interface_name == interface_name)
+        & (TrafficFiveMinuteAggregate.bucket_start == bucket)
+    )
+    if row is None:
+        TrafficFiveMinuteAggregate.create(
+            node=node_id,
+            interface_name=interface_name,
+            bucket_start=bucket,
+            **values,
+        )
+        return
+    for key, value in values.items():
+        setattr(row, key, value)
+    row.save()
 
 
 def _upsert_hourly(node_id: int, interface_name: str, bucket: datetime, values: dict) -> None:
@@ -78,6 +98,92 @@ def _parse_bucket(value) -> datetime:
         except ValueError:
             continue
     return datetime.fromisoformat(text)
+
+
+def _five_minute_expr(column: str) -> str:
+    return f"datetime((CAST(strftime('%s', {column}) AS INTEGER) / 300) * 300, 'unixepoch')"
+
+
+def refresh_five_minute(start: datetime, end: datetime) -> int:
+    start = as_utc(start)
+    end = as_utc(end)
+    raw_begin = utcnow() - timedelta(days=settings.raw_retention_days)
+    window_start = max(five_minute_bucket(start), five_minute_bucket(raw_begin))
+    if window_start >= end:
+        return 0
+    bucket = _five_minute_expr("period_end")
+    traffic_rows = db.execute_sql(
+        f"""
+        SELECT node_id, interface_name, {bucket} AS bucket,
+               SUM(rx_bytes), SUM(tx_bytes), MAX(rx_bps), MAX(tx_bps),
+               SUM(duration_seconds), COUNT(*)
+        FROM traffic_interval
+        WHERE valid = 1 AND rx_bytes IS NOT NULL
+          AND period_end >= ? AND period_end < ?
+        GROUP BY node_id, interface_name, bucket
+        """,
+        (window_start, end),
+    ).fetchall()
+    resource_bucket = _five_minute_expr("collected_at")
+    resource_rows = db.execute_sql(
+        f"""
+        SELECT node_id, {resource_bucket} AS bucket,
+               AVG(cpu_percent), MAX(cpu_percent), MIN(cpu_percent),
+               AVG(CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END),
+               MAX(CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END),
+               MAX(ram_total_bytes), AVG(ram_used_bytes),
+               AVG(CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END),
+               MAX(CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END),
+               MAX(disk_total_bytes), AVG(disk_used_bytes), COUNT(*)
+        FROM node_metric_sample
+        WHERE collected_at >= ? AND collected_at < ?
+        GROUP BY node_id, bucket
+        """,
+        (window_start, end),
+    ).fetchall()
+    count = 0
+    for node_id, interface_name, bucket_value, rx, tx, rx_max, tx_max, dur, cnt in traffic_rows:
+        duration = float(dur or 0)
+        rx_bytes = int(rx or 0)
+        tx_bytes = int(tx or 0)
+        _upsert_five_minute(
+            node_id,
+            interface_name,
+            _parse_bucket(bucket_value),
+            {
+                "rx_bytes": rx_bytes,
+                "tx_bytes": tx_bytes,
+                "rx_bps_avg": (rx_bytes / duration) if duration else None,
+                "tx_bps_avg": (tx_bytes / duration) if duration else None,
+                "rx_bps_max": rx_max,
+                "tx_bps_max": tx_max,
+                "duration_seconds": duration,
+                "sample_count": int(cnt or 0),
+            },
+        )
+        count += 1
+    for node_id, bucket_value, cpu_avg, cpu_max, cpu_min, ram_avg, ram_max, ram_total, ram_used, disk_avg, disk_max, disk_total, disk_used, cnt in resource_rows:
+        _upsert_five_minute(
+            node_id,
+            "*",
+            _parse_bucket(bucket_value),
+            {
+                "cpu_avg": cpu_avg,
+                "cpu_max": cpu_max,
+                "cpu_min": cpu_min,
+                "ram_percent_avg": ram_avg,
+                "ram_percent_max": ram_max,
+                "ram_total_bytes": ram_total,
+                "ram_used_avg": ram_used,
+                "disk_percent_avg": disk_avg,
+                "disk_percent_max": disk_max,
+                "disk_total_bytes": disk_total,
+                "disk_used_avg": disk_used,
+                "resource_samples": int(cnt or 0),
+            },
+        )
+        count += 1
+    return count
 
 
 def refresh_hourly(start: datetime, end: datetime) -> int:
@@ -258,11 +364,14 @@ def refresh_daily(start: datetime, end: datetime) -> int:
 def run_retention(now: datetime | None = None) -> None:
     moment = now or utcnow()
     raw_cutoff = moment - timedelta(days=settings.raw_retention_days)
+    refresh_five_minute(raw_cutoff - timedelta(minutes=10), moment + timedelta(minutes=1))
     refresh_hourly(raw_cutoff - timedelta(hours=2), moment + timedelta(minutes=1))
     refresh_daily(raw_cutoff - timedelta(days=2), moment + timedelta(minutes=1))
     TrafficInterval.delete().where(TrafficInterval.period_end < raw_cutoff).execute()
     NetworkCounterSample.delete().where(NetworkCounterSample.collected_at < raw_cutoff).execute()
     NodeMetricSample.delete().where(NodeMetricSample.collected_at < raw_cutoff).execute()
+    five_cutoff = moment - timedelta(days=settings.five_minute_retention_days)
+    TrafficFiveMinuteAggregate.delete().where(TrafficFiveMinuteAggregate.bucket_start < five_cutoff).execute()
     hourly_cutoff = moment - timedelta(days=settings.hourly_retention_days)
     refresh_daily(hourly_cutoff - timedelta(days=2), moment + timedelta(minutes=1))
     TrafficHourlyAggregate.delete().where(TrafficHourlyAggregate.bucket_start < hourly_cutoff).execute()
@@ -280,6 +389,7 @@ def run_maintenance() -> None:
     try:
         connection()
         now = utcnow()
+        refresh_five_minute(now - timedelta(hours=2), now + timedelta(minutes=1))
         refresh_hourly(now - timedelta(hours=settings.aggregate_lookback_hours), now + timedelta(minutes=1))
         refresh_daily(now - timedelta(days=3), now + timedelta(minutes=1))
         scan_connections()

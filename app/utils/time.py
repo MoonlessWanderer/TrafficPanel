@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from app.core.settings import settings
 from app.core.errors import AppError
 
-PRESETS = {"1h", "24h", "7d", "30d", "today", "yesterday", "month", "custom"}
+PRESETS = {"1h", "6h", "24h", "7d", "30d", "today", "yesterday", "month", "custom"}
 
 
 def utcnow() -> datetime:
@@ -61,7 +61,7 @@ def resolve_range(
         end = as_utc(end)
     chosen = (preset or "").strip().lower()
     if chosen in {"", "custom"} and start is None and end is None:
-        chosen = "24h"
+        chosen = "1h"
     elif chosen in {"", "custom"} and (start is not None or end is not None):
         chosen = "custom"
     if chosen not in PRESETS:
@@ -79,6 +79,8 @@ def resolve_range(
     local_now = moment.replace(tzinfo=timezone.utc).astimezone(zone)
     if chosen == "1h":
         return moment - timedelta(hours=1), moment, chosen
+    if chosen == "6h":
+        return moment - timedelta(hours=6), moment, chosen
     if chosen == "24h":
         return moment - timedelta(hours=24), moment, chosen
     if chosen == "7d":
@@ -99,6 +101,26 @@ def resolve_range(
         )
     month_start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return month_start.astimezone(timezone.utc).replace(tzinfo=None), moment, chosen
+
+
+def five_minute_bucket(value: datetime) -> datetime:
+    value = as_utc(value).replace(second=0, microsecond=0)
+    return value.replace(minute=(value.minute // 5) * 5)
+
+
+def five_minute_slots(start: datetime, end: datetime) -> list[datetime]:
+    start = as_utc(start)
+    end = as_utc(end)
+    if start >= end:
+        return []
+    cursor = five_minute_bucket(start)
+    if cursor < start:
+        cursor += timedelta(minutes=5)
+    slots: list[datetime] = []
+    while cursor < end:
+        slots.append(cursor)
+        cursor += timedelta(minutes=5)
+    return slots
 
 
 def hour_bucket(value: datetime) -> datetime:

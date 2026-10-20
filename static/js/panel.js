@@ -199,15 +199,49 @@
     });
   }
 
-  function formatTick(value) {
+  function formatTick(value, style) {
     if (!value) return "";
-    return new Date(value).toLocaleString("en-GB", {
+    const options = style === "day"
+      ? { day: "numeric", month: "short" }
+      : { hour: "2-digit", minute: "2-digit" };
+    return new Date(value).toLocaleString("en-GB", { timeZone: timezone, ...options });
+  }
+
+  function localParts(value) {
+    const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: timezone,
-      month: "numeric",
-      day: "numeric",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-    });
+      hourCycle: "h23",
+    }).formatToParts(new Date(value));
+    const read = (type) => Number(parts.find((part) => part.type === type)?.value || 0);
+    return { year: read("year"), month: read("month"), day: read("day"), hour: read("hour") % 24, minute: read("minute") };
+  }
+
+  function tickStep(spanMs) {
+    const hour = 3600 * 1000;
+    const day = 24 * hour;
+    if (spanMs <= hour) return { unit: "minute", step: 5 };
+    if (spanMs <= 6 * hour) return { unit: "hour", step: 1 };
+    if (spanMs <= day) return { unit: "hour", step: 3 };
+    if (spanMs <= 7 * day) return { unit: "day", step: 1 };
+    if (spanMs <= 31 * day) return { unit: "day", step: 5 };
+    return { unit: "day", step: 7 };
+  }
+
+  function showTick(value, step, origin) {
+    const local = localParts(value);
+    if (step.unit === "minute") return local.minute % step.step === 0;
+    if (step.unit === "hour") return local.minute === 0 && local.hour % step.step === 0;
+    if (local.hour !== 0 || local.minute !== 0) return false;
+    if (step.step === 1) return true;
+    const start = localParts(origin);
+    const from = Date.UTC(start.year, start.month - 1, start.day);
+    const to = Date.UTC(local.year, local.month - 1, local.day);
+    return Math.round((to - from) / 86400000) % step.step === 0;
   }
 
   function formatUnit(value, unit) {
@@ -262,7 +296,7 @@
     const form = $("#time-form");
     if (!form) return;
     const current = params();
-    form.preset.value = current.get("preset") || "24h";
+    form.preset.value = current.get("preset") || "1h";
     form.classList.toggle("custom", form.preset.value === "custom");
     form.preset.onchange = () => form.classList.toggle("custom", form.preset.value === "custom");
     form.onsubmit = (event) => {
@@ -361,17 +395,20 @@
     const visible = datasets.filter((item) => (yUnit === "bps" ? item.unit === "bps" : item.unit !== "bps"));
     const source = visible.length ? visible : datasets;
     const colors = chartColors();
+    const rawLabels = labels || [];
+    const span = rawLabels.length > 1 ? new Date(rawLabels[rawLabels.length - 1]) - new Date(rawLabels[0]) : 0;
+    const step = tickStep(span);
     charts[id] = new Chart(canvas, {
       type: "line",
       data: {
-        labels: labels.map((item) => formatTick(item)),
+        labels: rawLabels,
         datasets: source.map((item, index) => ({
           label: item.label,
           data: item.data,
           borderColor: item.color || palette[index % palette.length],
           backgroundColor: "transparent",
           spanGaps: false,
-          pointRadius: source.reduce((max, item) => Math.max(max, (item.data || []).filter((value) => value != null).length), 0) > 90 ? 0 : 2,
+          pointRadius: rawLabels.length > 12 ? 0 : 2,
           pointHoverRadius: 4,
           borderWidth: 2,
           tension: 0.25,
@@ -387,6 +424,9 @@
           legend: { position: "bottom", rtl: false, labels: { color: colors.muted, boxWidth: 12, padding: 14, font: { family: "system-ui, Segoe UI, sans-serif" } } },
           tooltip: {
             callbacks: {
+              title(items) {
+                return formatWhen(rawLabels[items[0]?.dataIndex]);
+              },
               label(context) {
                 const unit = source[context.datasetIndex]?.unit || yUnit;
                 return `${context.dataset.label}: ${formatUnit(context.parsed.y, unit)}`;
@@ -395,7 +435,21 @@
           },
         },
         scales: {
-          x: { grid: { display: false }, ticks: { color: colors.muted, maxTicksLimit: 4, maxRotation: 0, autoSkip: true, font: { family: "system-ui, Segoe UI, sans-serif", size: 11 } } },
+          x: {
+            grid: { display: false },
+            ticks: {
+              color: colors.muted,
+              maxRotation: step.unit === "minute" ? 40 : 0,
+              minRotation: 0,
+              autoSkip: false,
+              font: { family: "system-ui, Segoe UI, sans-serif", size: 11 },
+              callback(_value, index) {
+                const iso = rawLabels[index];
+                if (!iso || (rawLabels[0] && !showTick(iso, step, rawLabels[0]))) return "";
+                return formatTick(iso, step.unit === "day" ? "day" : "time");
+              },
+            },
+          },
           y: chartYScale(source, yUnit, colors),
         },
       },

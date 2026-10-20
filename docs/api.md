@@ -43,7 +43,7 @@ The session uses an HttpOnly cookie. Changing requests also need the CSRF token 
 
 Shared query filters: `preset`, `from`, `to`, `node_ids`, `group_ids`, `q`, `status`, `traffic`, `traffic_min`, `traffic_max`, `cpu_min`, `cpu_max`, `ram_min`, `ram_max`, `disk_min`, `disk_max`, `sort`, `page`, `page_size`.
 
-`preset` is one of `1h`, `24h`, `7d`, `30d`, `today`, `yesterday`, `month`, `custom`. Today and month boundaries use the timezone stored in panel settings.
+`preset` is one of `1h`, `6h`, `24h`, `7d`, `30d`, `today`, `yesterday`, `month`, `custom`. When it is omitted, the range is the last hour. Today and month boundaries use the timezone stored in panel settings.
 
 `POST /system/restart` needs an admin session and CSRF. It writes an audit row, then replaces the process after a short delay.
 
