@@ -144,33 +144,6 @@
     }
   }
 
-  function showInstall(nodeId, keyActive) {
-    const card = $("#install-card");
-    if (!card) return;
-    const note = $("#install-note");
-    const command = $("#install-command");
-    const button = $("#copy-install");
-    const key = keyActive ? rememberedNodeKey(nodeId) : "";
-    if (!key) {
-      if (!keyActive) forgetNodeKey(nodeId);
-      note.textContent = keyActive
-        ? "Rotate the key to get a command that installs this node and connects it to the panel."
-        : "The key is revoked. Rotate the key to get an install command.";
-      command.textContent = "";
-      button.hidden = true;
-      return;
-    }
-    note.textContent = "Run this command on the server. It installs the node and connects it to this panel.";
-    button.hidden = false;
-    const write = (interval) => {
-      const text = installCommand(nodeId, key, interval);
-      command.textContent = text;
-      button.onclick = () => copyText(text, "Command copied.");
-    };
-    write(reportEvery || 30);
-    reportInterval().then(write);
-  }
-
   function showKey(title, key, notice, nodeId) {
     rememberNodeKey(nodeId, key);
     const modal = $("#modal");
@@ -193,7 +166,6 @@
     $("#modal-cancel").onclick = () => {
       modal.hidden = true;
     };
-    showInstall(nodeId, true);
   }
 
   function formatWhen(value) {
@@ -602,7 +574,22 @@
       ? samples.data.map((item) => `<tr><td>${formatWhen(item.collected_at)}</td><td class="num">${item.cpu_percent.toFixed(1)}%</td><td class="num">${item.ram_percent == null ? "—" : item.ram_percent.toFixed(1) + "%"}</td><td class="num">${item.disk_percent == null ? "—" : item.disk_percent.toFixed(1) + "%"}</td><td class="num ltr">${item.load_1.toFixed(2)}</td><td class="num">${Math.floor(item.uptime_seconds / 3600)}h</td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     setState("");
-    showInstall(info.node_id, info.key_active);
+    $("#install-command-btn").onclick = async () => {
+      const saved = info.key_active ? rememberedNodeKey(info.node_id) : "";
+      if (saved) {
+        showKey("Install command", saved, "Run this command on the server. It installs the node and connects it to this panel.", info.node_id);
+        return;
+      }
+      forgetNodeKey(info.node_id);
+      if (!await confirmBox("Install command", "The command includes the node key. Rotate the key to create it. The previous key will stop working.", "Rotate and show", true)) return;
+      try {
+        const rotated = await api(`/api/v1/nodes/${nodeId}/rotate-key`, { method: "POST" });
+        showKey("Install command", rotated.data.node_key, rotated.data.key_notice, info.node_id);
+        load();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
     $("#toggle-node").textContent = info.is_enabled ? "Disable" : "Enable";
     $("#toggle-node").onclick = async () => {
       const path = info.is_enabled ? "disable" : "enable";
