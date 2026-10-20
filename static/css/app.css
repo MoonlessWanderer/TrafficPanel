@@ -288,6 +288,30 @@ body[data-page="settings"] .time-form { display: none; }
   .filter-primary, .filter-grid { grid-template-columns: 1fr 1fr; }
   .compare-primary { grid-template-columns: 1fr; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .topbar:has(.time-form.custom) { align-items: stretch; }
+  .topbar:has(.time-form.custom) .top-start,
+  .topbar:has(.time-form.custom) .top-actions { flex: 1 1 100%; width: 100%; }
+  .topbar:has(.time-form.custom) .top-actions { margin-inline-start: 0; justify-content: flex-end; }
+  .topbar:has(.time-form.custom) .time-form {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+  .topbar:has(.time-form.custom) .time-form select { width: 100%; min-width: 0; }
+  .topbar:has(.time-form.custom) .time-form label.custom-only {
+    display: grid;
+    grid-template-columns: 2.75rem minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+  }
+  .topbar:has(.time-form.custom) .time-form label.custom-only input {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .topbar:has(.time-form.custom) .time-form .btn { justify-self: start; }
 }
 @media (max-width: 860px) {
   .sidebar {
