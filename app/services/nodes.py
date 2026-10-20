@@ -29,6 +29,11 @@ def _require_active(node: Node) -> None:
 
 
 def create_node(data: NodeCreate, *, actor_id: str, ip_address: str | None) -> dict:
+    if len(data.group_ids) != 1:
+        raise AppError("group_required", "Choose one group. Create a group first if none exist.", 422)
+    groups = list(NodeGroup.select().where(NodeGroup.id.in_(data.group_ids)))
+    if len(groups) != 1:
+        raise AppError("not_found", "The selected group was not found.", 404)
     now = utcnow()
     plaintext = new_node_key()
     with db.atomic():
@@ -48,12 +53,7 @@ def create_node(data: NodeCreate, *, actor_id: str, ip_address: str | None) -> d
             is_active=True,
             created_at=now,
         )
-        if data.group_ids:
-            groups = list(NodeGroup.select().where(NodeGroup.id.in_(data.group_ids)))
-            if len(groups) != len(set(data.group_ids)):
-                raise AppError("not_found", "One of the selected groups was not found.", 404)
-            for group in groups:
-                NodeGroupMembership.create(node=node, group=group, created_at=now)
+        NodeGroupMembership.create(node=node, group=groups[0], created_at=now)
     write_audit(
         actor_type="user",
         actor_id=actor_id,

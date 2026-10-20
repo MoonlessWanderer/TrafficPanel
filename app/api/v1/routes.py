@@ -11,7 +11,7 @@ from app.core.errors import AppError
 from app.core.rate_limit import rate_limiter
 from app.models import Node, NodeGroup
 from app.schemas.auth import LoginIn
-from app.schemas.groups import GroupCreate, GroupUpdate, MembershipIn, TransferIn
+from app.schemas.groups import GroupCreate, GroupUpdate
 from app.schemas.ingest import HeartbeatIn, MetricsIn
 from app.schemas.nodes import NodeCreate, NodeUpdate
 from app.schemas.settings import SettingsUpdate
@@ -175,29 +175,6 @@ def patch_group(group_id: int, payload: GroupUpdate, request: Request, user=Depe
 def delete_group(group_id: int, request: Request, user=Depends(require_user)):
     groups.delete_group(group_id, actor_id=str(user.id), ip_address=client_ip(request))
     return ok({"deleted": True})
-
-
-@router.post("/groups/{group_id}/members")
-def post_members(group_id: int, payload: MembershipIn, request: Request, user=Depends(require_user)):
-    return ok(groups.add_members(group_id, payload.node_ids, actor_id=str(user.id), ip_address=client_ip(request)))
-
-
-@router.delete("/groups/{group_id}/members/{node_id}")
-def delete_member(group_id: int, node_id: str, request: Request, user=Depends(require_user)):
-    return ok(groups.remove_member(group_id, node_id, actor_id=str(user.id), ip_address=client_ip(request)))
-
-
-@router.post("/groups/{group_id}/transfer")
-def transfer(group_id: int, payload: TransferIn, request: Request, user=Depends(require_user)):
-    return ok(
-        groups.transfer_members(
-            group_id,
-            payload.node_ids,
-            payload.target_group_id,
-            actor_id=str(user.id),
-            ip_address=client_ip(request),
-        )
-    )
 
 
 @router.get("/groups/{group_id}/stats")

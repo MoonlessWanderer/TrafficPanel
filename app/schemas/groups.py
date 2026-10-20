@@ -69,10 +69,3 @@ class GroupUpdate(BaseModel):
         return _tags(value)
 
 
-class MembershipIn(BaseModel):
-    node_ids: list[str] = Field(min_length=1, max_length=200)
-
-
-class TransferIn(BaseModel):
-    node_ids: list[str] = Field(min_length=1, max_length=200)
-    target_group_id: int

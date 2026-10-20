@@ -64,8 +64,12 @@ def _ingest(client, node_id: str, key: str, moment: datetime, rx: int, tx: int, 
     )
 
 
-def _create_node(client, name: str) -> dict:
-    response = client.post("/api/v1/nodes", json={"name": name, "tags": ["edge"]})
+def _create_node(client, name: str, group_id: int | None = None) -> dict:
+    if group_id is None:
+        group = client.post("/api/v1/groups", json={"name": f"group-{name}", "color": "#0f6e6b"})
+        assert group.status_code == 201, group.text
+        group_id = group.json()["data"]["id"]
+    response = client.post("/api/v1/nodes", json={"name": name, "tags": ["edge"], "group_ids": [group_id]})
     assert response.status_code == 201, response.text
     return response.json()["data"]
 
@@ -158,13 +162,13 @@ def test_current_speed_is_the_latest_interval_not_the_range_average(client, admi
 
 
 def test_group_stats_follow_membership(client, admin):
-    alpha = _create_node(client, "alpha")
-    beta = _create_node(client, "beta")
     group = client.post("/api/v1/groups", json={"name": "لبه", "color": "#0f6e6b", "tags": ["اصلی"]})
     assert group.status_code == 201
     group_id = group.json()["data"]["id"]
-    added = client.post(f"/api/v1/groups/{group_id}/members", json={"node_ids": [alpha["node_id"], beta["node_id"]]})
-    assert added.status_code == 200
+    alpha = _create_node(client, "alpha", group_id)
+    beta = _create_node(client, "beta", group_id)
+    assert client.post(f"/api/v1/groups/{group_id}/members", json={"node_ids": [alpha["node_id"]]}).status_code == 404
+    assert client.post(f"/api/v1/groups/{group_id}/transfer", json={"node_ids": [alpha["node_id"]], "target_group_id": group_id}).status_code == 404
     now = datetime.now(timezone.utc)
     _ingest(client, alpha["node_id"], alpha["node_key"], now - timedelta(seconds=30), 0, 0, "nonce-alpha-00001", cpu=80)
     _ingest(client, alpha["node_id"], alpha["node_key"], now, 1_000, 0, "nonce-alpha-00002", cpu=80)
@@ -183,17 +187,17 @@ def test_group_stats_follow_membership(client, admin):
     speeds = [value for value in chart["datasets"][2]["data"] if value]
     assert speeds
     assert abs(sum(speeds) - (1_000 / 30 + 3_000 / 30)) < 0.1
-    client.delete(f"/api/v1/groups/{group_id}/members/{beta['node_id']}")
-    after = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
-    assert after["traffic"]["rx_bytes"] == 1_000
-    assert len(after["ranking"]) == 1
+    blocked = client.delete(f"/api/v1/groups/{group_id}")
+    assert blocked.status_code == 409
+    renamed = client.patch(f"/api/v1/nodes/{alpha['node_id']}", json={"name": "alpha-renamed"})
+    assert renamed.status_code == 200
+    assert renamed.json()["data"]["name"] == "alpha-renamed"
 
 
 def test_combined_filters_and_aggregate(client, admin):
-    alpha = _create_node(client, "alpha-node")
-    beta = _create_node(client, "beta-node")
     group = client.post("/api/v1/groups", json={"name": "فیلتر", "color": "#1d4e89"}).json()["data"]
-    client.post(f"/api/v1/groups/{group['id']}/members", json={"node_ids": [alpha["node_id"]]})
+    alpha = _create_node(client, "alpha-node", group["id"])
+    beta = _create_node(client, "beta-node")
     now = datetime.now(timezone.utc)
     _ingest(client, alpha["node_id"], alpha["node_key"], now - timedelta(seconds=30), 0, 0, "nonce-filter-a001", cpu=85)
     _ingest(client, alpha["node_id"], alpha["node_key"], now, 5_000, 0, "nonce-filter-a002", cpu=85)
@@ -450,22 +454,29 @@ def test_wrong_keys_do_not_spend_the_node_budget(client, admin):
     assert blocked.status_code == 429
 
 
-def test_new_node_can_join_a_group(client, admin):
+def test_new_node_must_join_one_group(client, admin):
+    bare = client.post("/api/v1/nodes", json={"name": "bare"})
+    assert bare.status_code == 422
+    assert bare.json()["error"]["message"] == "Choose one group. Create a group first if none exist."
     group = client.post("/api/v1/groups", json={"name": "edge", "color": "#0f6e6b"}).json()["data"]
+    other = client.post("/api/v1/groups", json={"name": "spare", "color": "#1d4e89"}).json()["data"]
     created = client.post("/api/v1/nodes", json={"name": "web", "group_ids": [group["id"]]})
     assert created.status_code == 201, created.text
     assert created.json()["data"]["groups"] == [{"id": group["id"], "name": "edge", "color": "#0f6e6b"}]
-    bare = client.post("/api/v1/nodes", json={"name": "bare"})
-    assert bare.status_code == 201
-    assert bare.json()["data"]["groups"] == []
+    both = client.post("/api/v1/nodes", json={"name": "both", "group_ids": [group["id"], other["id"]]})
+    assert both.status_code == 422
+    assert client.delete(f"/api/v1/groups/{group['id']}").status_code == 409
+    assert client.delete(f"/api/v1/nodes/{created.json()['data']['node_id']}").status_code == 200
+    assert client.delete(f"/api/v1/groups/{group['id']}").status_code == 200
+    assert client.delete(f"/api/v1/groups/{other['id']}").status_code == 200
 
 
 def test_removed_node_keeps_its_history(client, admin):
-    created = _create_node(client, "kept")
+    group = client.post("/api/v1/groups", json={"name": "kept-group", "color": "#0f6e6b"}).json()["data"]
+    created = _create_node(client, "kept", group["id"])
     node_id = created["node_id"]
     key = created["node_key"]
-    group = client.post("/api/v1/groups", json={"name": "kept-group", "color": "#0f6e6b"}).json()["data"]
-    assert client.post(f"/api/v1/groups/{group['id']}/members", json={"node_ids": [node_id]}).status_code == 200
+    assert client.delete(f"/api/v1/groups/{group['id']}").status_code == 409
     now = datetime.now(timezone.utc)
     assert _ingest(client, node_id, key, now - timedelta(seconds=30), 1_000, 400, "nonce-kept-0000001").status_code == 200
     assert _ingest(client, node_id, key, now, 1_600, 700, "nonce-kept-0000002").status_code == 200

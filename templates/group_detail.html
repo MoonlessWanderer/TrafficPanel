@@ -3,7 +3,6 @@
 <header class="page-head">
   <div><h1 id="group-title">Group</h1><p id="group-sub"></p></div>
   <div class="row-actions">
-    <button class="btn" id="add-member" type="button">Add node</button>
     <button class="btn ghost" id="edit-group" type="button">Edit</button>
     <button class="btn danger" id="delete-group" type="button">Delete group</button>
   </div>
@@ -13,6 +12,6 @@
 <article class="card"><header><h2>Group traffic</h2><div class="seg" id="traffic-view"><button type="button" data-view="volume" class="on">Volume</button><button type="button" data-view="speed">Speed</button></div></header><div class="chart-box"><canvas id="traffic-chart"></canvas></div></article>
 <article class="card">
   <header><h2>Member ranking</h2></header>
-  <div class="table-wrap"><table><thead><tr><th>Node</th><th>Status</th><th>Download</th><th>Upload</th><th>Traffic</th><th>CPU</th><th></th></tr></thead><tbody id="rank-rows"></tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>Node</th><th>Status</th><th>Download</th><th>Upload</th><th>Traffic</th><th>CPU</th></tr></thead><tbody id="rank-rows"></tbody></table></div>
 </article>
 {% endblock %}

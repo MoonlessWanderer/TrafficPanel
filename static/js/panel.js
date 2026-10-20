@@ -284,19 +284,6 @@
     return params().toString();
   }
 
-  async function listAllNodes() {
-    const items = [];
-    let page = 1;
-    let total = 0;
-    do {
-      const result = await api(`/api/v1/nodes?page=${page}&page_size=100`);
-      items.push(...result.data);
-      total = result.meta.total;
-      page += 1;
-    } while (items.length < total);
-    return items;
-  }
-
   function syncTimeForm() {
     const form = $("#time-form");
     if (!form) return;
@@ -592,6 +579,11 @@
       };
       $("#new-node").onclick = async () => {
         const groups = await api("/api/v1/groups");
+        if (!groups.data.length) {
+          const go = await confirmBox("Create a group first", "A node has to belong to a group. Create a group, then add the node.", "Go to groups");
+          if (go) location.href = "/groups";
+          return;
+        }
         const values = await formBox("New node", [
           { name: "name", label: "Name", required: true },
           { name: "description", label: "Description" },
@@ -599,13 +591,12 @@
             name: "group_id",
             label: "Group",
             type: "select",
-            placeholder: "No group",
+            required: true,
             options: groups.data.map((group) => ({ value: String(group.id), label: group.name })),
           },
         ]);
         if (!values) return;
-        const body = { name: values.name, description: values.description };
-        if (values.group_id) body.group_ids = [Number(values.group_id)];
+        const body = { name: values.name, description: values.description, group_ids: [Number(values.group_id)] };
         try {
           const result = await api("/api/v1/nodes", {
             method: "POST",
@@ -690,6 +681,19 @@
       ? samples.data.map((item) => `<tr><td>${formatWhen(item.collected_at)}</td><td class="num">${item.cpu_percent.toFixed(1)}%</td><td class="num">${item.ram_percent == null ? "—" : item.ram_percent.toFixed(1) + "%"}</td><td class="num">${item.disk_percent == null ? "—" : item.disk_percent.toFixed(1) + "%"}</td><td class="num ltr">${item.load_1.toFixed(2)}</td><td class="num">${Math.floor(item.uptime_seconds / 3600)}h</td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     setState("");
+    $("#rename-node").onclick = async () => {
+      const values = await formBox("Rename node", [
+        { name: "name", label: "Name", value: info.name, required: true },
+      ]);
+      if (!values || values.name === info.name) return;
+      try {
+        await api(`/api/v1/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ name: values.name }) });
+        toast("Node renamed.");
+        load();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
     $("#install-command-btn").onclick = async () => {
       const saved = info.key_active ? rememberedNodeKey(info.node_id) : "";
       if (saved) {
@@ -778,40 +782,9 @@
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
     $("#rank-rows").innerHTML = data.ranking.length
-      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
-      : `<tr><td colspan="7">No data has been recorded for this range.</td></tr>`;
-    $("#rank-rows").onclick = async (event) => {
-      const button = event.target.closest("[data-remove]");
-      if (!button) return;
-      await api(`/api/v1/groups/${groupId}/members/${button.dataset.remove}`, { method: "DELETE" });
-      toast("Node removed from the group.");
-      load();
-    };
+      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td></tr>`).join("")
+      : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     setState("");
-    $("#add-member").onclick = async () => {
-      const listed = await listAllNodes();
-      const memberIds = new Set((data.members || []).map((item) => item.node_id));
-      const choices = listed.filter((node) => !memberIds.has(node.node_id));
-      if (!choices.length) {
-        toast(listed.length ? "Every node is already in this group." : "Add a node before adding it to this group.");
-        return;
-      }
-      const values = await formBox("Add node", [{
-        name: "node_id",
-        label: "Node",
-        type: "select",
-        required: true,
-        options: choices.map((node) => ({ value: node.node_id, label: node.name })),
-      }]);
-      if (!values) return;
-      try {
-        await api(`/api/v1/groups/${groupId}/members`, { method: "POST", body: JSON.stringify({ node_ids: [values.node_id] }) });
-        toast("Node added to the group.");
-        load();
-      } catch (error) {
-        toast(error.message);
-      }
-    };
     $("#edit-group").onclick = async () => {
       const values = await formBox("Edit group", [
         { name: "name", label: "Name", value: data.group.name, required: true },
@@ -823,9 +796,17 @@
       load();
     };
     $("#delete-group").onclick = async () => {
-      if (!await confirmBox("Delete group", "Members are kept. Delete this group?", "Delete", true)) return;
-      await api(`/api/v1/groups/${groupId}`, { method: "DELETE" });
-      location.href = "/groups";
+      if (data.counts.total) {
+        await confirmBox("Delete the nodes first", "This group still has nodes. Delete those nodes, then delete the group.", "OK");
+        return;
+      }
+      if (!await confirmBox("Delete group", "Delete this group?", "Delete", true)) return;
+      try {
+        await api(`/api/v1/groups/${groupId}`, { method: "DELETE" });
+        location.href = "/groups";
+      } catch (error) {
+        toast(error.message);
+      }
     };
   }
 

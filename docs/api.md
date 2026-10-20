@@ -24,9 +24,6 @@ The session uses an HttpOnly cookie. Changing requests also need the CSRF token 
 - `GET|POST|PATCH|DELETE /nodes`
 - `POST /nodes/{node_id}/enable|disable|rotate-key|revoke-key`
 - `GET|POST|PATCH|DELETE /groups`
-- `POST /groups/{id}/members`
-- `DELETE /groups/{id}/members/{node_id}`
-- `POST /groups/{id}/transfer`
 - `GET /dashboard/summary`
 - `GET /nodes/{node_id}/stats`
 - `GET /nodes/{node_id}/samples`
@@ -42,6 +39,8 @@ The session uses an HttpOnly cookie. Changing requests also need the CSRF token 
 Shared query filters: `preset`, `from`, `to`, `node_ids`, `group_ids`, `q`, `status`, `traffic`, `traffic_min`, `traffic_max`, `cpu_min`, `cpu_max`, `ram_min`, `ram_max`, `disk_min`, `disk_max`, `sort`, `page`, `page_size`.
 
 `preset` is one of `1h`, `6h`, `24h`, `7d`, `30d`, `today`, `yesterday`, `month`, `custom`. When it is omitted, the range is the last hour. Today and month boundaries use the timezone stored in panel settings.
+
+`POST /nodes` needs exactly one group id. A group that still has a node cannot be deleted.
 
 `POST /system/restart` needs an admin session and CSRF. It writes an audit row, then replaces the process after a short delay.
 
