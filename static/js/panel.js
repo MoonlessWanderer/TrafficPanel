@@ -389,7 +389,9 @@
     const colors = chartColors();
     const rawLabels = labels || [];
     const span = rawLabels.length > 1 ? new Date(rawLabels[rawLabels.length - 1]) - new Date(rawLabels[0]) : 0;
-    const step = tickStep(span, bucket);
+    const step = tickStep(span, bucket === "5min" ? "5min" : "hour");
+    const stepSeconds = bucket === "5min" ? 300 : Number(bucket) || 300;
+    const labelEvery = rawLabels.length <= 12 ? 1 : Math.ceil(rawLabels.length / 8);
     charts[id] = new Chart(canvas, {
       type: "line",
       data: {
@@ -400,7 +402,7 @@
           borderColor: item.color || palette[index % palette.length],
           backgroundColor: "transparent",
           spanGaps: false,
-          pointRadius: bucket === "day" ? 2 : rawLabels.length > 12 ? 0 : 2,
+          pointRadius: rawLabels.length > 30 ? 0 : 2,
           pointHoverRadius: 4,
           borderWidth: 2,
           tension: 0.25,
@@ -418,7 +420,7 @@
             callbacks: {
               title(items) {
                 const iso = rawLabels[items[0]?.dataIndex];
-                return bucket === "day" ? formatTick(iso, "day") : formatWhen(iso);
+                return stepSeconds >= 86400 ? formatTick(iso, "day") : formatWhen(iso);
               },
               label(context) {
                 const unit = source[context.datasetIndex]?.unit || yUnit;
@@ -432,14 +434,19 @@
             grid: { display: false },
             ticks: {
               color: colors.muted,
-              maxRotation: step.unit === "minute" ? 40 : 0,
+              maxRotation: stepSeconds < 86400 ? 40 : 0,
               minRotation: 0,
               autoSkip: false,
               font: { family: "system-ui, Segoe UI, sans-serif", size: 11 },
               callback(_value, index) {
                 const iso = rawLabels[index];
-                if (!iso || (rawLabels[0] && !showTick(iso, step, rawLabels[0]))) return "";
-                return formatTick(iso, step.unit === "day" ? "day" : "time");
+                if (!iso) return "";
+                if (bucket === "5min") {
+                  if (rawLabels[0] && !showTick(iso, step, rawLabels[0])) return "";
+                  return formatTick(iso, "time");
+                }
+                if (index % labelEvery !== 0 && index !== rawLabels.length - 1) return "";
+                return formatTick(iso, stepSeconds >= 86400 ? "day" : "time");
               },
             },
           },

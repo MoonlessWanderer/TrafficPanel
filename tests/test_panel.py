@@ -299,15 +299,17 @@ def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
     assert chart.status_code == 200, chart.text
     body = chart.json()["data"]
     rx = [value for value in body["datasets"][0]["data"] if value]
-    assert body["range"]["bucket"] == "5min"
-    assert len(rx) >= 4
+    assert body["range"]["bucket"] == "2880"
+    assert len(body["labels"]) == 30
+    assert sum(rx) == 10_000
     resources = client.get("/api/v1/charts/resources?preset=24h&node_ids=" + node_id)
     cpu = [value for value in resources.json()["data"]["datasets"][0]["data"] if value is not None]
-    assert len(cpu) >= 4
+    assert cpu
     week = client.get("/api/v1/charts/traffic?preset=7d&node_ids=" + node_id)
-    assert week.json()["data"]["range"]["bucket"] == "hour"
+    assert week.json()["data"]["range"]["bucket"] == "20160"
+    assert len(week.json()["data"]["labels"]) == 30
     week_rx = [value for value in week.json()["data"]["datasets"][0]["data"] if value]
-    assert len(week_rx) >= 4
+    assert sum(week_rx) == 10_000
 
 
 def _label_gaps(labels: list[str]) -> list[float]:
@@ -332,26 +334,32 @@ def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch)
     assert _ingest(client, node_id, key, second + timedelta(seconds=30), 3_000, 0, "nonce-coarse-0004", cpu=55).status_code == 200
 
     fine = client.get(f"/api/v1/charts/traffic?preset=6h&node_ids={node_id}").json()["data"]
-    assert fine["range"]["bucket"] == "5min"
-    assert sorted(value for value in fine["datasets"][0]["data"] if value) == [600, 2_400]
+    assert fine["range"]["bucket"] == "720"
+    assert len(fine["labels"]) == 30
+    assert set(_label_gaps(fine["labels"])) == {720}
+    assert sum(value for value in fine["datasets"][0]["data"] if value) == 3_000
 
     week = client.get(f"/api/v1/charts/traffic?preset=7d&node_ids={node_id}").json()["data"]
-    assert week["range"]["bucket"] == "hour"
-    assert len(week["labels"]) in {167, 168}
-    assert set(_label_gaps(week["labels"])) == {3600}
-    assert sorted(value for value in week["datasets"][0]["data"] if value) == [600, 2_400]
+    assert week["range"]["bucket"] == "20160"
+    assert len(week["labels"]) == 30
+    assert set(_label_gaps(week["labels"])) == {20160}
+    assert sum(value for value in week["datasets"][0]["data"] if value) == 3_000
     cpu = client.get(f"/api/v1/charts/resources?preset=7d&node_ids={node_id}").json()["data"]
-    assert cpu["range"]["bucket"] == "hour"
-    assert sorted(value for value in cpu["datasets"][0]["data"] if value is not None) == [40, 55]
+    assert cpu["range"]["bucket"] == "20160"
+    assert [value for value in cpu["datasets"][0]["data"] if value is not None] == [55]
 
     month = client.get("/api/v1/charts/traffic?preset=30d").json()["data"]
-    assert month["range"]["bucket"] == "day"
+    assert month["range"]["bucket"] == "86400"
     assert len(month["labels"]) == 30
     assert set(_label_gaps(month["labels"])) == {86400}
-    assert client.get("/api/v1/charts/traffic?preset=24h").json()["data"]["range"]["bucket"] == "5min"
-    assert len(client.get("/api/v1/charts/traffic?preset=24h").json()["data"]["labels"]) == 288
-    assert client.get("/api/v1/charts/traffic?preset=yesterday").json()["data"]["range"]["bucket"] == "5min"
-    assert client.get("/api/v1/charts/traffic?preset=month").json()["data"]["range"]["bucket"] == "day"
+    day = client.get("/api/v1/charts/traffic?preset=24h").json()["data"]
+    assert day["range"]["bucket"] == "2880"
+    assert len(day["labels"]) == 30
+    assert set(_label_gaps(day["labels"])) == {2880}
+    yesterday = client.get("/api/v1/charts/traffic?preset=yesterday").json()["data"]
+    assert yesterday["range"]["bucket"] == "2880"
+    assert len(yesterday["labels"]) == 30
+    assert len(client.get("/api/v1/charts/traffic?preset=month").json()["data"]["labels"]) == 30
 
     now = datetime.now(timezone.utc)
     custom_hour = client.get(
@@ -364,14 +372,16 @@ def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch)
         "/api/v1/charts/traffic",
         params={"from": _stamp(now - timedelta(days=3)), "to": _stamp(now)},
     ).json()["data"]
-    assert custom_week["range"]["bucket"] == "hour"
-    assert len(custom_week["labels"]) in {71, 72}
+    assert custom_week["range"]["bucket"] == "8640"
+    assert len(custom_week["labels"]) == 30
+    assert set(_label_gaps(custom_week["labels"])) == {8640}
     custom_month = client.get(
         "/api/v1/charts/traffic",
         params={"from": _stamp(now - timedelta(days=10)), "to": _stamp(now)},
     ).json()["data"]
-    assert custom_month["range"]["bucket"] == "day"
-    assert len(custom_month["labels"]) == 10
+    assert custom_month["range"]["bucket"] == "28800"
+    assert len(custom_month["labels"]) == 30
+    assert set(_label_gaps(custom_month["labels"])) == {28800}
 
 
 def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admin):
@@ -398,7 +408,8 @@ def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admi
     assert cpu == [30]
     six = client.get("/api/v1/charts/traffic?preset=6h")
     assert six.status_code == 200
-    assert len(six.json()["data"]["labels"]) == 72
+    assert len(six.json()["data"]["labels"]) == 30
+    assert set(_label_gaps(six.json()["data"]["labels"])) == {720}
     missing = client.get("/api/v1/charts/traffic")
     assert missing.json()["data"]["range"]["preset"] == "1h"
 
