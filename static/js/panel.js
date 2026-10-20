@@ -266,6 +266,11 @@
     return `${shown} ${units[index]}`;
   }
 
+  function usageRow(href, name, status, stale, rx, tx, total, cpu) {
+    const cpuText = cpu == null ? "—" : `${Number(cpu).toFixed(1)}%`;
+    return `<tr><td><a href="${href}">${escapeHtml(name)}</a></td><td>${statusPill(status, stale)}</td><td class="num">${escapeHtml(rx || "—")}</td><td class="num">${escapeHtml(tx || "—")}</td><td class="num">${escapeHtml(total || "—")}</td><td class="num">${cpuText}</td></tr>`;
+  }
+
   function statusPill(status, stale) {
     const labels = { online: "Online", offline: "Offline", disabled: "Disabled", removed: "Removed" };
     const extra = stale ? " · delayed" : "";
@@ -622,23 +627,26 @@
 
   async function renderNodes() {
     setState("Loading…");
-    const result = await api(`/api/v1/nodes?${queryString()}`);
+    const next = params();
+    next.delete("sort");
+    next.set("sort", "-created");
+    const result = await api(`/api/v1/nodes?${next.toString()}`);
     const rows = $("#node-rows");
     if (!result.data.length) {
-      rows.innerHTML = "";
-      setState(result.meta.total ? "Nothing matches this filter." : "No nodes have been added yet.");
+      rows.innerHTML = `<tr><td colspan="6">${result.meta.total ? "Nothing matches this filter." : "No nodes have been added yet."}</td></tr>`;
+      setState("");
     } else {
       setState("");
-      rows.innerHTML = result.data.map((node) => `
-        <tr>
-          <td><a href="/nodes/${encodeURIComponent(node.node_id)}?${queryString()}">${escapeHtml(node.name)}</a></td>
-          <td class="ltr">${node.node_id}</td>
-          <td>${statusPill(node.status, node.stale)}</td>
-          <td class="num">${node.range_traffic?.total_text?.text || "—"}</td>
-          <td class="num">${node.cpu_percent == null ? "—" : node.cpu_percent.toFixed(1) + "%"}</td>
-          <td class="num">${node.ram.percent == null ? "—" : node.ram.percent.toFixed(1) + "%"}</td>
-          <td>${node.last_seen_at ? formatWhen(node.last_seen_at) : "No report has been received yet."}</td>
-        </tr>`).join("");
+      rows.innerHTML = result.data.map((node) => usageRow(
+        `/nodes/${encodeURIComponent(node.node_id)}?${queryString()}`,
+        node.name,
+        node.status,
+        node.stale,
+        node.range_traffic?.rx_text?.text,
+        node.range_traffic?.tx_text?.text,
+        node.range_traffic?.total_text?.text,
+        node.cpu_percent,
+      )).join("");
     }
     const pages = Math.max(1, Math.ceil(result.meta.total / result.meta.page_size));
     $("#pager").innerHTML = `Page ${result.meta.page} of ${pages}`;
@@ -789,8 +797,17 @@
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
     $("#rank-rows").innerHTML = data.ranking.length
-      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td></tr>`).join("")
-      : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
+      ? data.ranking.map((item) => usageRow(
+        `/nodes/${encodeURIComponent(item.node_id)}?${queryString()}`,
+        item.name,
+        item.status,
+        item.stale,
+        item.rx_text?.text,
+        item.tx_text?.text,
+        item.total_text?.text,
+        item.cpu_percent,
+      )).join("")
+      : `<tr><td colspan="6">No nodes have been added yet.</td></tr>`;
     setState("");
     $("#edit-group").onclick = async () => {
       const values = await formBox("Edit group", [

@@ -194,6 +194,13 @@ def test_group_stats_follow_membership(client, admin):
     assert renamed.json()["data"]["name"] == "alpha-renamed"
 
 
+def test_node_list_is_newest_first(client, admin):
+    older = _create_node(client, "older")
+    newer = _create_node(client, "newer")
+    listed = client.get("/api/v1/nodes", params={"sort": "-created"}).json()["data"]
+    assert [item["node_id"] for item in listed] == [newer["node_id"], older["node_id"]]
+
+
 def test_combined_filters_and_aggregate(client, admin):
     group = client.post("/api/v1/groups", json={"name": "فیلتر", "color": "#1d4e89"}).json()["data"]
     alpha = _create_node(client, "alpha-node", group["id"])

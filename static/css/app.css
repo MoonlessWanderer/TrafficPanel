@@ -199,7 +199,7 @@ main a:hover { text-decoration: underline; }
 .filter-primary, .filter-grid {
   display: grid; gap: 0.65rem; align-items: end;
 }
-.filter-primary { grid-template-columns: minmax(160px, 1.5fr) repeat(3, minmax(120px, 1fr)) auto; }
+.filter-primary { grid-template-columns: minmax(160px, 1.5fr) repeat(2, minmax(120px, 1fr)) auto; }
 .alert-primary { grid-template-columns: minmax(160px, 240px) auto; justify-content: start; }
 .filter-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 0.7rem; }
 .filters label, .login-card label, .dialog label {

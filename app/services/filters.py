@@ -24,6 +24,8 @@ SORTS = {
     "-ram",
     "last_seen",
     "-last_seen",
+    "created",
+    "-created",
 }
 STATUSES = {"online", "offline", "disabled"}
 KINDS = {"rx", "tx", "total"}

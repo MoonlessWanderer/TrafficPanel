@@ -25,7 +25,7 @@ from app.models import (
 from app.services.aggregates import refresh_daily, refresh_five_minute, refresh_hourly
 from app.services.filters import QueryFilters
 from app.services.nics import counted_interface, counted_sql, is_virtual_interface
-from app.services.present import group_payload, node_payload, node_status, percent, status_cutoff
+from app.services.present import group_payload, node_is_stale, node_payload, node_status, percent, status_cutoff
 from app.utils.jsonbox import load_json
 from app.utils.time import (
     as_utc,
@@ -361,6 +361,10 @@ def _sort_value(node: Node, filters: QueryFilters, traffic: dict | None, reverse
             return (1, 0)
         stamp = node.last_seen_at.timestamp()
         return (0, -stamp if reverse else stamp)
+    if key == "created":
+        stamp = node.created_at.timestamp() if node.created_at is not None else 0
+        identity = node.id or 0
+        return (0, (-stamp, -identity) if reverse else (stamp, identity))
     if key == "traffic":
         value = _kind_value(traffic, filters.traffic_kind)
     elif key == "cpu":
@@ -1450,17 +1454,17 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
     nodes = [node for node in nodes if node.id in member_ids]
     visible = [node for node in nodes if node.deleted_at is None]
     ranking = []
-    known = []
+    ranked = []
     for node in visible:
-        block = _traffic_public(traffic.get(node.id))
-        if block["has_data"]:
-            known.append((node, block))
-    for node, block in sorted(known, key=lambda item: item[1]["total_bytes"] or 0, reverse=True):
+        ranked.append((node, _traffic_public(traffic.get(node.id))))
+    ranked.sort(key=lambda item: (item[1]["total_bytes"] is None, -(item[1]["total_bytes"] or 0)))
+    for node, block in ranked:
         ranking.append(
             {
                 "node_id": node.node_id,
                 "name": node.name,
                 "status": node_status(node),
+                "stale": node_is_stale(node),
                 "rx_bytes": block["rx_bytes"],
                 "tx_bytes": block["tx_bytes"],
                 "total_bytes": block["total_bytes"],
