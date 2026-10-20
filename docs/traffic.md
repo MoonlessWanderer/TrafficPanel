@@ -6,7 +6,7 @@ Traffic is the difference of cumulative operating-system counters, not a precomp
 - Interval TX uses the same rule.
 - Speed is that difference divided by the real seconds between the two samples.
 - A node total is the main interface only. That is the default-route interface, and virtual interfaces such as docker, veth, and bridges are left out.
-- Average speed across nodes is the mean of each node's average speed. It is not the grand total divided by the sample count again.
+- Across nodes, download and upload speed are the sum of each node's average speed. The maximum stays the highest speed recorded on one node.
 
 If the gap between two samples is longer than the allowed sample gap in panel settings, that interval is a gap. No zero-traffic row is stored for it, and it is left out of totals.
 

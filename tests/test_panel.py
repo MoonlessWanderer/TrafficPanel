@@ -156,7 +156,12 @@ def test_group_stats_follow_membership(client, admin):
     _ingest(client, beta["node_id"], beta["node_key"], now, 3_000, 0, "nonce-beta-000002", cpu=10)
     before = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
     assert before["traffic"]["rx_bytes"] == 4_000
+    assert abs(before["traffic"]["rx_bps_avg"] - (1_000 / 30 + 3_000 / 30)) < 0.1
     assert before["counts"]["online"] == 2
+    chart = client.get(f"/api/v1/charts/traffic?preset=1h&group_ids={group_id}").json()["data"]
+    speeds = [value for value in chart["datasets"][2]["data"] if value]
+    assert speeds
+    assert abs(sum(speeds) - (1_000 / 30 + 3_000 / 30)) < 0.1
     client.delete(f"/api/v1/groups/{group_id}/members/{beta['node_id']}")
     after = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
     assert after["traffic"]["rx_bytes"] == 1_000

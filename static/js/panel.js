@@ -456,6 +456,21 @@
     });
   }
 
+  function bindChartView(buttonId, chartId, labels, datasets) {
+    const box = document.getElementById(buttonId);
+    let view = "volume";
+    const paint = () => drawChart(chartId, labels, datasets, view === "speed" ? "bps" : "bytes");
+    paint();
+    if (!box) return;
+    box.onclick = (event) => {
+      const button = event.target.closest("button");
+      if (!button) return;
+      view = button.dataset.view;
+      box.querySelectorAll("button").forEach((item) => item.classList.toggle("on", item === button));
+      paint();
+    };
+  }
+
   function drawBar(id, labels, data) {
     const canvas = document.getElementById(id);
     if (!canvas || !window.Chart) return;
@@ -510,13 +525,13 @@
       card("Offline", data.nodes.offline, ""),
       card("Alerting", data.nodes.alerting, "Open alerts"),
       card("Groups", data.groups.total, ""),
-      card("Download", textOf(trafficBlock, "rx_text"), ""),
-      card("Upload", textOf(trafficBlock, "tx_text"), ""),
+      card("Download", textOf(trafficBlock, "rx_text"), textOf(trafficBlock, "rx_bps_avg_text", "")),
+      card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_avg_text", "")),
       card("Total usage", textOf(trafficBlock, "total_text"), ""),
       card("Average CPU", resourcesBlock.cpu_avg == null ? "—" : `${resourcesBlock.cpu_avg.toFixed(1)}%`, resourcesBlock.cpu_max == null ? "" : `Max <bdi>${resourcesBlock.cpu_max.toFixed(1)}%</bdi>`),
       card("Average RAM", resourcesBlock.ram_percent_avg == null ? "—" : `${resourcesBlock.ram_percent_avg.toFixed(1)}%`, resourcesBlock.ram_percent_max == null ? "" : `Max <bdi>${resourcesBlock.ram_percent_max.toFixed(1)}%</bdi>`),
     ].join("");
-    drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
+    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
     drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
     $("#top-nodes").innerHTML = data.top_nodes.length
       ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
@@ -659,16 +674,7 @@
       card("Disk", info.disk.percent == null ? "—" : `${info.disk.percent.toFixed(1)}%`, info.disk.total_text?.text ? `<bdi>${escapeHtml(info.disk.used_text?.text || "—")}</bdi> of <bdi>${escapeHtml(info.disk.total_text.text)}</bdi>` : ""),
       card("Uptime", info.uptime_seconds == null ? "—" : `<bdi>${Math.floor(info.uptime_seconds / 3600)}</bdi> h`, ""),
     ].join("");
-    let view = "volume";
-    const paint = () => drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, view === "speed" ? "bps" : "bytes");
-    paint();
-    $("#traffic-view").onclick = (event) => {
-      const button = event.target.closest("button");
-      if (!button) return;
-      view = button.dataset.view;
-      $("#traffic-view").querySelectorAll("button").forEach((item) => item.classList.toggle("on", item === button));
-      paint();
-    };
+    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
     drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
     $("#iface-rows").innerHTML = stats.data.interfaces.length
       ? stats.data.interfaces.map((item) => `<tr><td class="ltr">${escapeHtml(item.name)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.rx_bps_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_bps_text?.text || "—")}</td><td class="num">${item.rx_errors ?? "—"} / ${item.tx_errors ?? "—"}</td></tr>`).join("")
@@ -762,12 +768,12 @@
       card("Online", data.counts.online, `of ${data.counts.total}`),
       card("Offline", data.counts.offline, ""),
       card("Download", textOf(trafficBlock, "rx_text"), textOf(trafficBlock, "rx_bps_avg_text", "")),
-      card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_max_text", "")),
+      card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_avg_text", "")),
       card("CPU", resources.cpu_avg == null ? "—" : `${resources.cpu_avg.toFixed(1)}%`, resources.cpu_max == null ? "" : `Max ${resources.cpu_max.toFixed(1)}%`),
       card("RAM", resources.ram_percent_avg == null ? "—" : `${resources.ram_percent_avg.toFixed(1)}%`, ""),
       card("Disk capacity", data.disk.total_text?.text || "—", data.disk.used_text ? `Used ${data.disk.used_text.text}` : ""),
     ].join("");
-    drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
+    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
     drawBar("share-chart", data.ranking.map((item) => item.status === "removed" ? "Removed node" : item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
       ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")

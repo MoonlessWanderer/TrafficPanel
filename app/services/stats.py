@@ -34,7 +34,8 @@ from app.utils.units import format_bps, format_bytes
 SPEED_METHOD = (
     "Average speed for a node is valid bytes divided by the duration of those intervals. "
     "Gaps are left out of the denominator, and missing data is not treated as zero. "
-    "Across nodes, the average is the mean of those speeds and the maximum is the highest recorded speed."
+    "Across nodes, download and upload speed are the sum of those averages. "
+    "The maximum stays the highest speed recorded on one node."
 )
 
 
@@ -430,6 +431,13 @@ def _mean(values: list[float | None]) -> float | None:
     return sum(usable) / len(usable)
 
 
+def _sum_known(values: list[float | None]) -> float | None:
+    usable = [value for value in values if value is not None]
+    if not usable:
+        return None
+    return float(sum(usable))
+
+
 def _combine_traffic(nodes: list[Node], traffic: dict[int, dict]) -> dict:
     blocks = [_traffic_public(traffic.get(node.id)) for node in nodes]
     active = [block for block in blocks if block["has_data"]]
@@ -440,8 +448,8 @@ def _combine_traffic(nodes: list[Node], traffic: dict[int, dict]) -> dict:
         return empty
     rx = sum(block["rx_bytes"] or 0 for block in active)
     tx = sum(block["tx_bytes"] or 0 for block in active)
-    rx_avg = _mean([block["rx_bps_avg"] for block in active])
-    tx_avg = _mean([block["tx_bps_avg"] for block in active])
+    rx_avg = _sum_known([block["rx_bps_avg"] for block in active])
+    tx_avg = _sum_known([block["tx_bps_avg"] for block in active])
     rx_max_values = [block["rx_bps_max"] for block in active if block["rx_bps_max"] is not None]
     tx_max_values = [block["tx_bps_max"] for block in active if block["tx_bps_max"] is not None]
     return {
@@ -837,22 +845,21 @@ def _five_traffic_points(node_ids: list[int], slots: list[datetime]) -> dict[dat
         return {}
     ph = _placeholders(len(node_ids))
     sql = f"""
-        SELECT bucket_start, SUM(rx_bytes), SUM(tx_bytes), SUM(duration_seconds), SUM(sample_count)
+        SELECT bucket_start, SUM(rx_bytes), SUM(tx_bytes), SUM(rx_bps_avg), SUM(tx_bps_avg), SUM(sample_count)
         FROM traffic_five_minute_aggregate
         WHERE {counted_sql()} AND sample_count > 0
           AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
         GROUP BY bucket_start
     """
     points: dict[datetime, dict] = {}
-    for bucket, rx, tx, dur, count in db.execute_sql(
+    for bucket, rx, tx, rx_bps, tx_bps, count in db.execute_sql(
         sql, [slots[0], slots[-1] + timedelta(minutes=5), *node_ids]
     ).fetchall():
-        duration = float(dur or 0)
         points[_parse_dt(bucket).replace(microsecond=0)] = {
             "rx": int(rx or 0),
             "tx": int(tx or 0),
-            "rx_bps": (int(rx or 0) / duration) if duration else None,
-            "tx_bps": (int(tx or 0) / duration) if duration else None,
+            "rx_bps": None if rx_bps is None else float(rx_bps),
+            "tx_bps": None if tx_bps is None else float(tx_bps),
             "count": int(count or 0),
         }
     return points

@@ -10,7 +10,7 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from peewee import fn
+from peewee import IntegrityError, fn
 
 from app.core.settings import settings
 from app.db.database import connection, db
@@ -38,13 +38,20 @@ def _upsert_five_minute(node_id: int, interface_name: str, bucket: datetime, val
         & (TrafficFiveMinuteAggregate.bucket_start == bucket)
     )
     if row is None:
-        TrafficFiveMinuteAggregate.create(
-            node=node_id,
-            interface_name=interface_name,
-            bucket_start=bucket,
-            **values,
-        )
-        return
+        try:
+            TrafficFiveMinuteAggregate.create(
+                node=node_id,
+                interface_name=interface_name,
+                bucket_start=bucket,
+                **values,
+            )
+            return
+        except IntegrityError:
+            row = TrafficFiveMinuteAggregate.get(
+                (TrafficFiveMinuteAggregate.node == node_id)
+                & (TrafficFiveMinuteAggregate.interface_name == interface_name)
+                & (TrafficFiveMinuteAggregate.bucket_start == bucket)
+            )
     for key, value in values.items():
         setattr(row, key, value)
     row.save()
