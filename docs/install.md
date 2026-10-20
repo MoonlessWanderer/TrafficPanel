@@ -1,5 +1,43 @@
 # Install and run
 
+## Server
+
+On Debian or Ubuntu, as root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
+```
+
+The script installs Python 3.12, clones the panel to `/opt/traffic-panel`, and starts the `traffic-panel` service.
+
+- Leave the domain empty to listen on port 8080 without TLS.
+- Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
+
+Update and remove:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- uninstall
+```
+
+Update fetches the current `main` branch, installs Python dependencies again, and restarts the service. The saved `config.py` and the database stay in place. New settings added by the project keep their default until you change them.
+
+Uninstall asks you to type `DELETE`. It then stops the service, deletes `/opt/traffic-panel` (including the database and logs), removes the Nginx site, deletes the certificate issued for the configured domain, and removes the `trafficpanel` user. It does not uninstall Nginx, Certbot, or Python, because other sites may use them.
+
+The same commands work from a checkout:
+
+```bash
+sudo bash install.sh
+sudo bash install.sh update
+sudo bash install.sh uninstall
+```
+
+Non-interactive install:
+
+```bash
+sudo bash install.sh install --admin admin --password 'a-long-password' --domain panel.example.com --email you@example.com
+```
+
 ## Requirements
 
 - Python 3.12

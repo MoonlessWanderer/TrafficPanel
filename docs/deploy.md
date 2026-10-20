@@ -2,11 +2,13 @@
 
 ## Service
 
-Edit `deploy/vps-monitor-panel.service` with the real project path and a non-root user. Keep a single process. SQLite and the in-process scheduler are built for one worker.
+The supported install is `install.sh`. It creates the `traffic-panel` service, runs one worker, and keeps the SQLite database under `/opt/traffic-panel/data`.
 
 ```bash
-sudo systemctl enable --now vps-monitor-panel
+sudo systemctl enable --now traffic-panel
 ```
+
+`deploy/vps-monitor-panel.service` matches that layout if you install by hand. SQLite and the in-process scheduler are built for one worker.
 
 ## HTTPS
 

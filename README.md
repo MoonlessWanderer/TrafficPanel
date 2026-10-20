@@ -2,6 +2,23 @@
 
 A standalone panel for traffic and resource metrics from virtual servers. Each VPS connects with its own node id and key. The agent only sends data outward.
 
+## Server
+
+On Debian or Ubuntu, as root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
+```
+
+The installer asks for the first admin account. Leave the domain empty to serve plain HTTP on port 8080. Enter a domain and an email to put Nginx in front and issue a Let's Encrypt certificate.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- uninstall
+```
+
+Update keeps `config.py` and the SQLite database. Uninstall removes the service, program files, database, proxy site, and the certificate issued for this panel.
+
 ## Local run
 
 ```bash
