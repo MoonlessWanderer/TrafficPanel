@@ -5,10 +5,12 @@
 On Debian or Ubuntu, as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
 ```
 
 The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It asks for an install directory. Leaving that answer empty installs `traffic-panel` in the directory where you ran the command, usually `/root/traffic-panel`. The panel is not installed under `/opt`. It starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it. If a parent directory such as `/root` blocks the service user, the installer adds execute permission for others on that parent so the service can enter the panel directory.
+
+`sudo` without `-E` drops `http_proxy` and `https_proxy`. The installer also reads those variables from `/etc/environment` and from `Acquire::http::Proxy` and `Acquire::https::Proxy` in apt configuration, then passes them to git and pip.
 
 - Leave the domain empty to listen on port 8080 without TLS.
 - Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
@@ -16,8 +18,8 @@ The script uses the server's `python3` when it is Python 3.9 or newer and can cr
 Update and remove:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- update
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
 ```
 
 Update fetches the current `main` branch, installs Python dependencies again, and restarts the service. The saved `config.py` and the database stay in place. New settings added by the project keep their default until you change them.

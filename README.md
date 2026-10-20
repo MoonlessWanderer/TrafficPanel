@@ -7,14 +7,14 @@ A standalone panel for traffic and resource metrics from virtual servers. Each s
 On Debian or Ubuntu, as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
 ```
 
 The installer asks for the first admin account. Leave the domain empty to serve plain HTTP on port 8080. Enter a domain and an email to put Nginx in front and issue a Let's Encrypt certificate.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- update
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
 ```
 
 Update keeps `config.py` and the SQLite database. Uninstall removes the service, program files, database, proxy site, and the certificate issued for this panel.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Install, update, or remove the Traffic Panel on Debian or Ubuntu.
 #
-#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
-#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- update
-#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash -s -- uninstall
+#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
+#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update
+#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
 set -euo pipefail
 
 REPO="https://github.com/MoonlessWanderer/TrafficPanel.git"
@@ -196,6 +196,91 @@ require_deb() {
   esac
 }
 
+load_proxy_file() {
+  local file="$1"
+  local line key value
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    line="${line#export }"
+    case "$line" in
+      http_proxy=*|https_proxy=*|HTTP_PROXY=*|HTTPS_PROXY=*|no_proxy=*|NO_PROXY=*|all_proxy=*|ALL_PROXY=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        value="${value%\"}"
+        value="${value#\"}"
+        value="${value%\'}"
+        value="${value#\'}"
+        if [ -z "${!key:-}" ] && [ -n "$value" ]; then
+          export "$key=$value"
+        fi
+        ;;
+    esac
+  done <"$file"
+}
+
+proxy_from_apt() {
+  local scheme="$1"
+  local file line value
+  local files=()
+  shopt -s nullglob
+  files=(/etc/apt/apt.conf.d/*)
+  shopt -u nullglob
+  [ -f /etc/apt/apt.conf ] && files+=("/etc/apt/apt.conf")
+  for file in "${files[@]}"; do
+    [ -f "$file" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        *Acquire::"${scheme}"::Proxy*)
+          value="${line#*\"}"
+          value="${value%%\"*}"
+          if [ -n "$value" ] && [ "$value" != "false" ] && [ "$value" != "DIRECT" ]; then
+            printf '%s' "$value"
+            return 0
+          fi
+          ;;
+      esac
+    done <"$file"
+  done
+  return 1
+}
+
+load_proxy() {
+  local apt_http="" apt_https=""
+  load_proxy_file /etc/environment
+  apt_http="$(proxy_from_apt http)" || true
+  apt_https="$(proxy_from_apt https)" || true
+  if [ -z "${http_proxy:-}${HTTP_PROXY:-}" ] && [ -n "$apt_http" ]; then
+    export http_proxy="$apt_http"
+    export HTTP_PROXY="$apt_http"
+  fi
+  if [ -z "${https_proxy:-}${HTTPS_PROXY:-}" ]; then
+    if [ -n "$apt_https" ]; then
+      export https_proxy="$apt_https"
+      export HTTPS_PROXY="$apt_https"
+    elif [ -n "${http_proxy:-}${HTTP_PROXY:-}" ]; then
+      export https_proxy="${HTTP_PROXY:-$http_proxy}"
+      export HTTPS_PROXY="$https_proxy"
+    fi
+  fi
+  [ -n "${http_proxy:-}" ] && [ -z "${HTTP_PROXY:-}" ] && export HTTP_PROXY="$http_proxy"
+  [ -n "${HTTP_PROXY:-}" ] && [ -z "${http_proxy:-}" ] && export http_proxy="$HTTP_PROXY"
+  [ -n "${https_proxy:-}" ] && [ -z "${HTTPS_PROXY:-}" ] && export HTTPS_PROXY="$https_proxy"
+  [ -n "${HTTPS_PROXY:-}" ] && [ -z "${https_proxy:-}" ] && export https_proxy="$HTTPS_PROXY"
+  if [ -n "${https_proxy:-}${http_proxy:-}" ]; then
+    if [ -z "${no_proxy:-}${NO_PROXY:-}" ]; then
+      export no_proxy="localhost,127.0.0.1"
+      export NO_PROXY="$no_proxy"
+    fi
+    [ -n "${no_proxy:-}" ] && [ -z "${NO_PROXY:-}" ] && export NO_PROXY="$no_proxy"
+    [ -n "${NO_PROXY:-}" ] && [ -z "${no_proxy:-}" ] && export no_proxy="$NO_PROXY"
+    echo "Using the configured proxy for downloads."
+  fi
+}
+
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
@@ -244,7 +329,14 @@ ensure_app_access() {
 }
 
 run_as_app() {
-  runuser -u "$APP_USER" -- env HOME="$APP_DIR" "$@"
+  local -a kept=()
+  local name
+  for name in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY all_proxy ALL_PROXY; do
+    if [ -n "${!name:-}" ]; then
+      kept+=("${name}=${!name}")
+    fi
+  done
+  runuser -u "$APP_USER" -- env HOME="$APP_DIR" "${kept[@]}" "$@"
 }
 
 write_config() {
@@ -650,6 +742,7 @@ main() {
   parse_args "$@"
   need_root
   require_deb
+  load_proxy
   case "$ACTION" in
     install) install_panel ;;
     update) update_panel ;;
