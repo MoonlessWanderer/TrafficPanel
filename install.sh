@@ -366,6 +366,21 @@ run_as_app() {
   runuser -u "$APP_USER" -- env HOME="$APP_DIR" "${kept[@]}" "$@"
 }
 
+prepare_app_tree() {
+  chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+  chmod 0750 "$APP_DIR"
+  ensure_app_access
+}
+
+install_python_packages() {
+  prepare_app_tree
+  if ! run_as_app test -x "${APP_DIR}/.venv/bin/python"; then
+    run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
+  fi
+  run_as_app "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
+  run_as_app "${APP_DIR}/.venv/bin/python" -m pip install -r "${APP_DIR}/requirements.txt"
+}
+
 write_config() {
   local secret="$1"
   local admin_user="$2"
@@ -743,11 +758,7 @@ install_panel() {
   apply_runtime
   ensure_user
   clone_repo
-  chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
-  ensure_app_access
-  run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
-  run_as_app "${APP_DIR}/.venv/bin/pip" install --upgrade pip
-  run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+  install_python_packages
 
   local secret saved_domain
   secret="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(48))')"
@@ -790,10 +801,7 @@ update_panel() {
   rm -rf "$stage"
   preserve_config "$saved"
   rm -f "$saved"
-  if [ ! -x "${APP_DIR}/.venv/bin/pip" ]; then
-    run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
-  fi
-  run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+  install_python_packages
   write_service
   systemctl restart "$SERVICE"
   if [ "$SSL" = "yes" ]; then
