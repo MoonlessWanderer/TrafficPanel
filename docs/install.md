@@ -8,7 +8,7 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
 ```
 
-The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It puts the whole panel in `/opt/traffic-panel`, and starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it.
+The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It asks for an install directory and uses `/usr/local/traffic-panel` when you leave that answer empty. The panel is not installed under `/opt`. It starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in the directory you chose. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it.
 
 - Leave the domain empty to listen on port 8080 without TLS.
 - Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/
 
 Update fetches the current `main` branch, installs Python dependencies again, and restarts the service. The saved `config.py` and the database stay in place. New settings added by the project keep their default until you change them.
 
-Uninstall asks you to type `DELETE`. It then stops the service, deletes `/opt/traffic-panel` (including the database and logs), removes the Nginx site, deletes the certificate issued for the configured domain, and removes the `trafficpanel` user. It does not uninstall Nginx, Certbot, or Python, because other sites may use them.
+Uninstall asks you to type `DELETE`. It then stops the service, deletes the install directory (including the database and logs), removes the Nginx site, deletes the certificate issued for the configured domain, and removes the `trafficpanel` user. It does not uninstall Nginx, Certbot, or Python, because other sites may use them.
 
 The same commands work from a checkout:
 
@@ -35,7 +35,7 @@ sudo bash install.sh uninstall
 Non-interactive install:
 
 ```bash
-sudo bash install.sh install --admin admin --password 'a-long-password' --domain panel.example.com --email you@example.com
+sudo bash install.sh install --dir /usr/local/traffic-panel --admin admin --password 'a-long-password' --domain panel.example.com --email you@example.com
 ```
 
 ## Requirements

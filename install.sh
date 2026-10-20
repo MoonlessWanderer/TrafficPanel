@@ -7,13 +7,14 @@
 set -euo pipefail
 
 REPO="https://github.com/MoonlessWanderer/TrafficPanel.git"
-APP_DIR="/opt/traffic-panel"
+DEFAULT_APP_DIR="/usr/local/traffic-panel"
+APP_DIR=""
 APP_USER="trafficpanel"
 APP_GROUP="trafficpanel"
 SERVICE="traffic-panel"
-STATE_FILE="${APP_DIR}/data/install.state"
-UNIT_FILE="${APP_DIR}/traffic-panel.service"
-NGINX_FILE="${APP_DIR}/nginx.conf"
+STATE_FILE=""
+UNIT_FILE=""
+NGINX_FILE=""
 PORT="8080"
 NGINX_SITE="traffic-panel"
 
@@ -33,6 +34,7 @@ Usage:
   install.sh uninstall [--yes]
 
 Options for install:
+  --dir PATH        Install directory. Default: /usr/local/traffic-panel
   --domain NAME     Public domain. HTTPS is issued for this name.
   --email ADDRESS   Email for the certificate authority. Required with --domain.
   --admin NAME      First admin username.
@@ -40,6 +42,7 @@ Options for install:
   --yes             Remove everything without the confirmation prompt.
 
 Without a domain the panel listens on port 8080 without TLS.
+The panel is not installed under /opt.
 EOF
 }
 
@@ -96,6 +99,54 @@ valid_email() {
 
 valid_admin() {
   [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+bind_app_dir() {
+  APP_DIR="${APP_DIR%/}"
+  case "$APP_DIR" in
+    /*/*) ;;
+    *) die "The install directory must be an absolute path with a parent directory." ;;
+  esac
+  case "$APP_DIR" in
+    *[[:space:]]*|*".."*) die "The install directory is invalid." ;;
+  esac
+  case "$APP_DIR" in
+    /opt|/opt/*)
+      die "Choose a directory outside /opt."
+      ;;
+    /|/usr|/usr/local|/etc|/var|/var/lib|/home|/root|/tmp|/bin|/sbin|/lib|/lib64|/boot|/dev|/proc|/sys|/run|/srv|/usr/bin|/usr/sbin|/usr/lib)
+      die "Refusing to use ${APP_DIR} as the install directory."
+      ;;
+  esac
+  STATE_FILE="${APP_DIR}/data/install.state"
+  UNIT_FILE="${APP_DIR}/traffic-panel.service"
+  NGINX_FILE="${APP_DIR}/nginx.conf"
+}
+
+choose_install_dir() {
+  if [ -z "$APP_DIR" ]; then
+    if [ -r /dev/tty ]; then
+      local entered
+      entered="$(prompt "Install directory [${DEFAULT_APP_DIR}]: ")"
+      APP_DIR="${entered:-$DEFAULT_APP_DIR}"
+    else
+      APP_DIR="$DEFAULT_APP_DIR"
+    fi
+  fi
+  bind_app_dir
+}
+
+locate_installed_dir() {
+  if [ -z "$APP_DIR" ]; then
+    local unit="/etc/systemd/system/${SERVICE}.service"
+    local dir=""
+    if [ -f "$unit" ]; then
+      dir="$(sed -n 's/^WorkingDirectory=//p' "$unit" | head -n 1 | tr -d '[:space:]')"
+    fi
+    [ -n "$dir" ] || die "The panel is not installed."
+    APP_DIR="$dir"
+  fi
+  bind_app_dir
 }
 
 installed() {
@@ -407,12 +458,14 @@ collect_install_answers() {
 }
 
 install_panel() {
+  choose_install_dir
   if installed; then
     die "The panel is already installed. Update it with: install.sh update"
   fi
   if [ -e "$APP_DIR" ]; then
     die "${APP_DIR} already exists. Remove it before installing again."
   fi
+  install -d -m 0755 "$(dirname "$APP_DIR")"
   collect_install_answers
   ensure_python
   ensure_user
@@ -467,9 +520,11 @@ install_panel() {
     echo "Panel is available at http://SERVER-IP:${PORT}"
   fi
   echo "The first admin password is stored only as a hash in the database."
+  echo "Installed in ${APP_DIR}"
 }
 
 update_panel() {
+  locate_installed_dir
   installed || die "The panel is not installed."
   [ -d "${APP_DIR}/.git" ] || die "The install directory is not a git checkout."
   ensure_python
@@ -492,6 +547,7 @@ update_panel() {
 }
 
 uninstall_panel() {
+  locate_installed_dir
   installed || die "The panel is not installed."
   load_state
   if [ "$ASSUME_YES" -ne 1 ]; then
@@ -510,10 +566,11 @@ uninstall_panel() {
   if [ -n "${DOMAIN:-}" ]; then
     remove_nginx
   fi
-  case "$APP_DIR" in
-    /opt/traffic-panel) rm -rf "$APP_DIR" ;;
-    *) die "Refusing to remove unexpected directory: ${APP_DIR}" ;;
-  esac
+  if [ -d "$APP_DIR" ]; then
+    [ -f "$STATE_FILE" ] || die "Refusing to remove ${APP_DIR}: install state is missing."
+    [ -d "${APP_DIR}/.git" ] || die "Refusing to remove ${APP_DIR}: it is not the panel checkout."
+    rm -rf "$APP_DIR"
+  fi
   if id "$APP_USER" >/dev/null 2>&1; then
     userdel "$APP_USER" || true
   fi
@@ -526,6 +583,11 @@ parse_args() {
       install|update|uninstall)
         ACTION="$1"
         shift
+        ;;
+      --dir)
+        APP_DIR="${2:-}"
+        [ -n "$APP_DIR" ] || die "Pass a directory after --dir."
+        shift 2
         ;;
       --domain)
         DOMAIN="${2:-}"
