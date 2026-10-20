@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Install, update, or remove the Traffic Panel on Debian or Ubuntu.
+# Traffic Panel menu for Debian or Ubuntu.
 #
 #   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
-#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update
-#   curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
 set -euo pipefail
 
 REPO="https://github.com/MoonlessWanderer/TrafficPanel.git"
@@ -14,33 +12,39 @@ SERVICE="traffic-panel"
 STATE_FILE=""
 UNIT_FILE=""
 NGINX_FILE=""
-PORT="8080"
+PORT="443"
 NGINX_SITE="traffic-panel"
+BACKEND_PORT="443"
+BIND_HOST="0.0.0.0"
 
-ACTION="install"
+ACTION=""
 DOMAIN=""
 EMAIL=""
 ADMIN_USER=""
 ADMIN_PASSWORD=""
 ASSUME_YES=0
+PORT_SET=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  install.sh                 Install, and ask whether to issue HTTPS
+  install.sh                 Open the menu
   install.sh install [options]
   install.sh update
+  install.sh start|stop|restart|status|logs
+  install.sh ssl
+  install.sh port NUMBER
   install.sh uninstall [--yes]
 
 Options for install:
   --dir PATH        Install directory. Default: ./traffic-panel where the command is run.
-  --domain NAME     Public domain. HTTPS is issued for this name.
+  --port NUMBER     Public port. Default: 443.
+  --domain NAME     Issue HTTPS for this domain during install.
   --email ADDRESS   Email for the certificate authority. Required with --domain.
   --admin NAME      First admin username.
   --password TEXT   First admin password, at least 10 characters.
   --yes             Remove everything without the confirmation prompt.
 
-Without a domain the panel listens on port 8080 without TLS.
 The panel is not installed under /opt.
 EOF
 }
@@ -98,6 +102,11 @@ valid_email() {
 
 valid_admin() {
   [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+valid_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
 bind_app_dir() {
@@ -165,12 +174,29 @@ installed() {
   [ -f "$STATE_FILE" ]
 }
 
+apply_runtime() {
+  if [ "${SSL:-no}" = "yes" ]; then
+    if [ "$PORT" = "8080" ]; then
+      BACKEND_PORT="8081"
+    else
+      BACKEND_PORT="8080"
+    fi
+    BIND_HOST="127.0.0.1"
+  else
+    BACKEND_PORT="$PORT"
+    BIND_HOST="0.0.0.0"
+  fi
+}
+
 load_state() {
   DOMAIN=""
+  SSL="no"
   if [ -f "$STATE_FILE" ]; then
     # shellcheck disable=SC1090
     . "$STATE_FILE"
   fi
+  [ -n "${PORT:-}" ] || PORT="443"
+  apply_runtime
 }
 
 write_state() {
@@ -178,7 +204,8 @@ write_state() {
   cat >"$STATE_FILE" <<EOF
 DOMAIN=$(printf '%q' "$DOMAIN")
 EMAIL=$(printf '%q' "$EMAIL")
-SSL=$( [ -n "$DOMAIN" ] && printf yes || printf no )
+SSL=$(printf '%s' "${SSL:-no}")
+PORT=$(printf '%s' "$PORT")
 EOF
   chown "$APP_USER:$APP_GROUP" "$STATE_FILE"
   chmod 0640 "$STATE_FILE"
@@ -288,7 +315,7 @@ apt_install() {
 }
 
 ensure_python() {
-  apt_install ca-certificates curl git
+  apt_install ca-certificates curl git python3 python3-venv
   local py version probe
   if command -v python3 >/dev/null 2>&1; then
     py="$(command -v python3)"
@@ -353,7 +380,7 @@ write_config() {
   HOST_VALUE="$host_value" \
   COOKIE_SECURE_VALUE="$cookie_secure" \
   TRUSTED_VALUE="$trusted" \
-  PORT_VALUE="$PORT" \
+  PORT_VALUE="${BACKEND_PORT:-$PORT}" \
   "$PYTHON" - <<'PY'
 import os
 from pathlib import Path
@@ -438,6 +465,10 @@ PY
 }
 
 write_service() {
+  local privilege="NoNewPrivileges=true"
+  if [ "$BACKEND_PORT" -lt 1024 ]; then
+    privilege=$'AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE'
+  fi
   cat >"$UNIT_FILE" <<EOF
 [Unit]
 Description=Traffic Panel
@@ -454,7 +485,7 @@ WorkingDirectory=${APP_DIR}
 ExecStart=${APP_DIR}/.venv/bin/python main.py
 Restart=on-failure
 RestartSec=3
-NoNewPrivileges=true
+${privilege}
 
 [Install]
 WantedBy=multi-user.target
@@ -485,7 +516,16 @@ link_nginx() {
   fi
 }
 
-write_nginx() {
+publish_nginx() {
+  chown "$APP_USER:$APP_GROUP" "$NGINX_FILE"
+  chmod 0644 "$NGINX_FILE"
+  link_nginx
+  nginx -t
+  systemctl enable nginx
+  systemctl reload nginx
+}
+
+write_nginx_http() {
   cat >"$NGINX_FILE" <<EOF
 server {
     listen 80;
@@ -494,7 +534,7 @@ server {
     client_max_body_size 2m;
 
     location / {
-        proxy_pass http://127.0.0.1:${PORT};
+        proxy_pass http://127.0.0.1:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -504,12 +544,42 @@ server {
     }
 }
 EOF
-  chown "$APP_USER:$APP_GROUP" "$NGINX_FILE"
-  chmod 0644 "$NGINX_FILE"
-  link_nginx
-  nginx -t
-  systemctl enable nginx
-  systemctl reload nginx
+  publish_nginx
+}
+
+write_nginx_ssl() {
+  local redirect='return 301 https://$host$request_uri;'
+  if [ "$PORT" != "443" ]; then
+    redirect="return 301 https://\$host:${PORT}\$request_uri;"
+  fi
+  cat >"$NGINX_FILE" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    ${redirect}
+}
+
+server {
+    listen ${PORT} ssl;
+    listen [::]:${PORT} ssl;
+    server_name ${DOMAIN};
+    client_max_body_size 2m;
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:${BACKEND_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 60s;
+    }
+}
+EOF
+  publish_nginx
 }
 
 remove_nginx() {
@@ -523,11 +593,9 @@ remove_nginx() {
 
 open_firewall() {
   if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-    if [ -n "$DOMAIN" ]; then
-      ufw allow 80/tcp
-      ufw allow 443/tcp
-    else
-      ufw allow "${PORT}/tcp"
+    ufw allow "${PORT}/tcp" || true
+    if [ "${SSL:-no}" = "yes" ]; then
+      ufw allow 80/tcp || true
     fi
   fi
 }
@@ -536,7 +604,7 @@ wait_healthy() {
   local host_header="$1"
   local i
   for i in $(seq 1 30); do
-    if curl -fsS -H "Host: ${host_header}" "http://127.0.0.1:${PORT}/health" >/dev/null; then
+    if curl -fsS -H "Host: ${host_header}" "http://127.0.0.1:${BACKEND_PORT}/health" >/dev/null; then
       return 0
     fi
     sleep 1
@@ -545,10 +613,67 @@ wait_healthy() {
   return 1
 }
 
-collect_install_answers() {
-  if [ -z "$DOMAIN" ] && [ -r /dev/tty ]; then
-    DOMAIN="$(prompt "Domain for HTTPS (leave empty to skip SSL): ")"
+config_get() {
+  local key="$1"
+  CONFIG_PATH="${APP_DIR}/config.py" CONFIG_KEY="$key" "$PYTHON" - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+key = os.environ["CONFIG_KEY"]
+tree = ast.parse(Path(os.environ["CONFIG_PATH"]).read_text(encoding="utf-8"))
+for node in tree.body:
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == key:
+        value = ast.literal_eval(node.value)
+        if isinstance(value, bool):
+            print("true" if value else "false")
+        elif value is None:
+            print("")
+        else:
+            print(value)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+panel_url() {
+  if [ "${SSL:-no}" = "yes" ] && [ -n "$DOMAIN" ]; then
+    if [ "$PORT" = "443" ]; then
+      printf 'https://%s' "$DOMAIN"
+    else
+      printf 'https://%s:%s' "$DOMAIN" "$PORT"
+    fi
+  elif [ "$PORT" = "80" ]; then
+    printf 'http://SERVER-IP'
+  else
+    printf 'http://SERVER-IP:%s' "$PORT"
   fi
+}
+
+already_present() {
+  if [ -z "$APP_DIR" ]; then
+    local unit="/etc/systemd/system/${SERVICE}.service"
+    local dir=""
+    if [ -f "$unit" ]; then
+      dir="$(sed -n 's/^WorkingDirectory=//p' "$unit" | head -n 1 | tr -d '[:space:]')"
+    fi
+    if [ -n "$dir" ]; then
+      APP_DIR="$dir"
+    else
+      return 1
+    fi
+  fi
+  bind_app_dir
+  installed
+}
+
+require_ready() {
+  locate_installed_dir
+  installed || die "The panel is not installed."
+  load_state
+}
+
+collect_install_answers() {
   if [ -n "$DOMAIN" ]; then
     valid_domain "$DOMAIN" || die "The domain name is invalid."
     if [ -z "$EMAIL" ]; then
@@ -572,17 +697,50 @@ collect_install_answers() {
   [ "${#ADMIN_PASSWORD}" -ge 10 ] || die "The admin password must be at least 10 characters."
 }
 
-install_panel() {
-  choose_install_dir
-  if installed; then
-    die "The panel is already installed. Update it with: install.sh update"
+ask_certificate() {
+  if [ -z "$DOMAIN" ]; then
+    [ -r /dev/tty ] || die "Pass --domain and --email."
+    DOMAIN="$(prompt "Domain: ")"
   fi
+  valid_domain "$DOMAIN" || die "The domain name is invalid."
+  if [ -z "$EMAIL" ]; then
+    [ -r /dev/tty ] || die "Pass --email."
+    EMAIL="$(prompt "Email for the certificate: ")"
+  fi
+  valid_email "$EMAIL" || die "The email address is invalid."
+}
+
+restore_direct() {
+  local secret="$1"
+  local public_port="$2"
+  SSL="no"
+  DOMAIN=""
+  PORT="$public_port"
+  apply_runtime
+  write_config "$secret" "" "" "0.0.0.0" "false" ""
+  write_service
+  remove_nginx
+  systemctl restart "$SERVICE" || true
+  write_state
+}
+
+install_panel() {
+  local requested_dir="$APP_DIR"
+  if already_present; then
+    die "The panel is already installed. Choose Update."
+  fi
+  APP_DIR="$requested_dir"
+  echo "Installing system packages."
+  ensure_python
+  choose_install_dir
   if [ -e "$APP_DIR" ]; then
     die "${APP_DIR} already exists. Remove it before installing again."
   fi
+  valid_port "$PORT" || die "The port must be from 1 to 65535."
   install -d -m 0755 "$(dirname "$APP_DIR")"
   collect_install_answers
-  ensure_python
+  SSL="no"
+  apply_runtime
   ensure_user
   git clone --depth 1 "$REPO" "$APP_DIR"
   chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
@@ -591,62 +749,34 @@ install_panel() {
   run_as_app "${APP_DIR}/.venv/bin/pip" install --upgrade pip
   run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 
-  local secret host_value cookie_secure trusted
+  local secret saved_domain
   secret="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(48))')"
-  if [ -n "$DOMAIN" ]; then
-    host_value="127.0.0.1"
-    cookie_secure="false"
-    trusted="$DOMAIN"
-  else
-    host_value="0.0.0.0"
-    cookie_secure="false"
-    trusted=""
-  fi
-  write_config "$secret" "$ADMIN_USER" "$ADMIN_PASSWORD" "$host_value" "$cookie_secure" "$trusted"
+  saved_domain="$DOMAIN"
+  write_config "$secret" "$ADMIN_USER" "$ADMIN_PASSWORD" "$BIND_HOST" "false" ""
   write_service
   systemctl enable --now "$SERVICE"
-  wait_healthy "${DOMAIN:-127.0.0.1}" || die "The panel did not become healthy. See the service log above."
-  write_config "$secret" "" "" "$host_value" "$cookie_secure" "$trusted"
-
-  if [ -n "$DOMAIN" ]; then
-    apt_install nginx certbot python3-certbot-nginx
-    write_nginx
-    echo "Requesting a certificate for ${DOMAIN}. Port 80 must reach this server and DNS must point here."
-    if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect; then
-      link_nginx
-      nginx -t
-      systemctl reload nginx
-      write_config "$secret" "" "" "127.0.0.1" "true" "$DOMAIN"
-      systemctl restart "$SERVICE"
-      wait_healthy "$DOMAIN" || die "The panel did not return after enabling secure cookies."
-    else
-      echo "HTTPS was not issued. The panel is still available at http://${DOMAIN} through the proxy."
-      echo "After DNS and port 80 work, run certbot --nginx -d ${DOMAIN}."
-    fi
-  fi
+  wait_healthy "127.0.0.1" || die "The panel did not become healthy. See the service log above."
+  write_config "$secret" "" "" "$BIND_HOST" "false" ""
   unset ADMIN_PASSWORD secret
   open_firewall
+  DOMAIN="$saved_domain"
   write_state
   echo
-  if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
-    echo "Panel is available at https://${DOMAIN}"
-  elif [ -n "$DOMAIN" ]; then
-    echo "Panel is available at http://${DOMAIN}"
-  else
-    echo "Panel is available at http://SERVER-IP:${PORT}"
-  fi
+  echo "Panel is available at $(panel_url)"
   echo "The first admin password is stored only as a hash in the database."
   echo "Installed in ${APP_DIR}"
+  if [ -n "$DOMAIN" ]; then
+    enable_ssl
+  fi
 }
 
 update_panel() {
-  locate_installed_dir
-  installed || die "The panel is not installed."
+  require_ready
   [ -d "${APP_DIR}/.git" ] || die "The install directory is not a git checkout."
+  echo "Installing system packages."
   ensure_python
   ensure_user
   ensure_app_access
-  load_state
   local saved
   saved="$(mktemp)"
   cp "${APP_DIR}/config.py" "$saved"
@@ -658,10 +788,181 @@ update_panel() {
     run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
   fi
   run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+  write_service
   systemctl restart "$SERVICE"
+  if [ "$SSL" = "yes" ]; then
+    write_nginx_ssl
+  fi
   wait_healthy "${DOMAIN:-127.0.0.1}" || die "The panel did not become healthy after the update."
   write_state
   echo "Update complete."
+  echo "Panel is available at $(panel_url)"
+}
+
+start_panel() {
+  require_ready
+  systemctl enable --now "$SERVICE"
+  if [ "$SSL" = "yes" ]; then
+    systemctl enable nginx
+    systemctl reload nginx || systemctl restart nginx
+  fi
+  wait_healthy "${DOMAIN:-127.0.0.1}" || die "The panel did not become healthy."
+  echo "Started. Panel is available at $(panel_url)"
+}
+
+stop_panel() {
+  require_ready
+  systemctl stop "$SERVICE"
+  echo "Stopped."
+}
+
+restart_panel() {
+  require_ready
+  systemctl restart "$SERVICE"
+  if [ "$SSL" = "yes" ]; then
+    systemctl reload nginx || true
+  fi
+  wait_healthy "${DOMAIN:-127.0.0.1}" || die "The panel did not become healthy."
+  echo "Restarted. Panel is available at $(panel_url)"
+}
+
+show_logs() {
+  require_ready
+  journalctl -u "$SERVICE" -n 120 --no-pager || true
+  if [ -f "${APP_DIR}/logs/panel.log" ]; then
+    echo
+    echo "---- ${APP_DIR}/logs/panel.log ----"
+    tail -n 40 "${APP_DIR}/logs/panel.log" || true
+  fi
+}
+
+show_status() {
+  require_ready
+  systemctl is-active "$SERVICE" || true
+  echo "Directory: ${APP_DIR}"
+  echo "Public port: ${PORT}"
+  echo "Application port: ${BACKEND_PORT}"
+  echo "SSL: ${SSL:-no}"
+  echo "Domain: ${DOMAIN:-none}"
+  echo "URL: $(panel_url)"
+}
+
+enable_ssl() {
+  require_ready
+  ensure_python
+  local saved_ssl saved_domain saved_port secret
+  saved_ssl="${SSL:-no}"
+  saved_domain="$DOMAIN"
+  saved_port="$PORT"
+  ask_certificate
+  apt_install nginx certbot python3-certbot-nginx
+  SSL="yes"
+  apply_runtime
+  secret="$(config_get SECRET_KEY)"
+  write_config "$secret" "" "" "127.0.0.1" "false" "$DOMAIN"
+  write_service
+  systemctl restart "$SERVICE"
+  if ! wait_healthy "$DOMAIN"; then
+    restore_direct "$secret" "$saved_port"
+    die "The panel did not stay healthy while preparing HTTPS."
+  fi
+  write_nginx_http
+  echo "Requesting a certificate for ${DOMAIN}. Port 80 must reach this server and DNS must point here."
+  if ! certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --keep-until-expiring; then
+    if [ "$saved_ssl" = "yes" ] && [ -f "/etc/letsencrypt/live/${saved_domain}/fullchain.pem" ]; then
+      SSL="yes"
+      DOMAIN="$saved_domain"
+      PORT="$saved_port"
+      apply_runtime
+      write_nginx_ssl || true
+      write_state
+    else
+      restore_direct "$secret" "$saved_port"
+    fi
+    die "HTTPS was not issued. The panel is still available without the new certificate."
+  fi
+  write_config "$secret" "" "" "127.0.0.1" "true" "$DOMAIN"
+  write_service
+  systemctl restart "$SERVICE"
+  write_nginx_ssl
+  wait_healthy "$DOMAIN" || die "The panel did not return after enabling secure cookies."
+  open_firewall
+  write_state
+  echo "Panel is available at $(panel_url)"
+}
+
+disable_ssl() {
+  require_ready
+  ensure_python
+  if [ "${SSL:-no}" != "yes" ]; then
+    echo "SSL is not enabled."
+    return 0
+  fi
+  local secret
+  secret="$(config_get SECRET_KEY)"
+  if [ -n "$DOMAIN" ] && command -v certbot >/dev/null 2>&1; then
+    certbot delete --cert-name "$DOMAIN" --non-interactive || true
+  fi
+  restore_direct "$secret" "$PORT"
+  wait_healthy "127.0.0.1" || die "The panel did not become healthy after removing SSL."
+  echo "SSL removed. Panel is available at $(panel_url)"
+}
+
+ssl_menu() {
+  require_ready
+  echo "Domain: ${DOMAIN:-none}"
+  echo "SSL: ${SSL:-no}"
+  echo "  1) Issue or replace certificate"
+  echo "  2) Remove certificate"
+  echo "  0) Back"
+  local choice
+  choice="$(prompt "Select: ")"
+  case "$choice" in
+    1) enable_ssl ;;
+    2) disable_ssl ;;
+    0) return 0 ;;
+    *) die "Unknown choice." ;;
+  esac
+}
+
+change_port() {
+  local requested="" next
+  if [ "$PORT_SET" -eq 1 ]; then
+    requested="$PORT"
+  fi
+  require_ready
+  ensure_python
+  if [ -n "$requested" ]; then
+    next="$requested"
+  else
+    [ -r /dev/tty ] || die "Pass a port number."
+    next="$(prompt "Public port [${PORT}]: ")"
+    next="${next:-$PORT}"
+  fi
+  valid_port "$next" || die "The port must be from 1 to 65535."
+  if [ "$SSL" = "yes" ] && [ "$next" = "80" ]; then
+    die "Port 80 is used for the certificate check while SSL is enabled."
+  fi
+  PORT="$next"
+  apply_runtime
+  local secret cookie trusted
+  secret="$(config_get SECRET_KEY)"
+  cookie="false"
+  trusted=""
+  if [ "$SSL" = "yes" ]; then
+    cookie="true"
+    trusted="$DOMAIN"
+  fi
+  write_config "$secret" "" "" "$BIND_HOST" "$cookie" "$trusted"
+  write_service
+  systemctl restart "$SERVICE"
+  wait_healthy "${DOMAIN:-127.0.0.1}" || die "The panel did not become healthy on the new port."
+  if [ "$SSL" = "yes" ]; then
+    write_nginx_ssl
+  fi
+  open_firewall
+  write_state
+  echo "Panel is available at $(panel_url)"
 }
 
 uninstall_panel() {
@@ -681,7 +982,7 @@ uninstall_panel() {
   if [ -n "${DOMAIN:-}" ] && command -v certbot >/dev/null 2>&1; then
     certbot delete --cert-name "$DOMAIN" --non-interactive || true
   fi
-  if [ -n "${DOMAIN:-}" ]; then
+  if [ "${SSL:-no}" = "yes" ] || [ -n "${DOMAIN:-}" ]; then
     remove_nginx
   fi
   if [ -d "$APP_DIR" ]; then
@@ -698,13 +999,28 @@ uninstall_panel() {
 parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      install|update|uninstall)
+      install|update|uninstall|start|stop|restart|status|logs|ssl)
         ACTION="$1"
         shift
+        ;;
+      port)
+        ACTION="port"
+        shift
+        if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+          PORT="$1"
+          PORT_SET=1
+          shift
+        fi
         ;;
       --dir)
         APP_DIR="${2:-}"
         [ -n "$APP_DIR" ] || die "Pass a directory after --dir."
+        shift 2
+        ;;
+      --port)
+        PORT="${2:-}"
+        [ -n "$PORT" ] || die "Pass a port number after --port."
+        PORT_SET=1
         shift 2
         ;;
       --domain)
@@ -738,15 +1054,81 @@ parse_args() {
   done
 }
 
+pause_menu() {
+  [ -r /dev/tty ] || return 0
+  prompt "Press Enter to continue: " >/dev/null
+}
+
+run_action() {
+  ( "$@" ) || true
+  pause_menu
+}
+
+menu_loop() {
+  local choice
+  while true; do
+    echo
+    echo "Traffic Panel"
+    if already_present; then
+      load_state
+      echo "Installed: $(panel_url)"
+    else
+      APP_DIR=""
+      echo "Not installed"
+    fi
+    cat <<'EOF'
+
+  1) Install
+  2) Update
+  3) Start
+  4) Stop
+  5) Restart
+  6) View logs
+  7) Domain and SSL
+  8) Change port
+  9) Status
+ 10) Uninstall
+  0) Exit
+EOF
+    choice="$(prompt "Select: ")"
+    case "$choice" in
+      1) run_action install_panel ;;
+      2) run_action update_panel ;;
+      3) run_action start_panel ;;
+      4) run_action stop_panel ;;
+      5) run_action restart_panel ;;
+      6) run_action show_logs ;;
+      7) run_action ssl_menu ;;
+      8) run_action change_port ;;
+      9) run_action show_status ;;
+      10) run_action uninstall_panel ;;
+      0|q) exit 0 ;;
+      *) echo "Unknown choice." ;;
+    esac
+  done
+}
+
 main() {
   parse_args "$@"
   need_root
   require_deb
   load_proxy
+  if [ -z "$ACTION" ]; then
+    [ -r /dev/tty ] || die "Pass an action, or run this from a terminal."
+    menu_loop
+    exit 0
+  fi
   case "$ACTION" in
     install) install_panel ;;
     update) update_panel ;;
     uninstall) uninstall_panel ;;
+    start) start_panel ;;
+    stop) stop_panel ;;
+    restart) restart_panel ;;
+    status) show_status ;;
+    logs) show_logs ;;
+    ssl) ssl_menu ;;
+    port) change_port ;;
   esac
 }
 

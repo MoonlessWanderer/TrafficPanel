@@ -2,7 +2,7 @@
 
 ## Service
 
-The supported install is `install.sh`. It keeps the program, database, configuration, service file, and Nginx site in one directory: `traffic-panel` inside the directory where you ran the installer, usually `/root/traffic-panel`, unless you choose another path outside `/opt`. It runs one worker and links the service into systemd.
+The supported install is `install.sh`. With no arguments it opens a menu. It keeps the program, database, configuration, service file, and Nginx site in one directory: `traffic-panel` inside the directory where you ran the installer, usually `/root/traffic-panel`, unless you choose another path outside `/opt`. A new install listens on port 443, runs one worker, and links the service into systemd.
 
 ```bash
 sudo systemctl enable --now traffic-panel

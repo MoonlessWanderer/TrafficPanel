@@ -10,7 +10,7 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
 ```
 
-The installer asks for the first admin account. Leave the domain empty to serve plain HTTP on port 8080. Enter a domain and an email to put Nginx in front and issue a Let's Encrypt certificate.
+The command opens a menu: install, update, start, stop, restart, logs, domain and SSL, port, status, and uninstall. Installation installs packages before it asks for an admin account. The panel listens on port 443.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update

@@ -8,12 +8,24 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
 ```
 
-The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It asks for an install directory. Leaving that answer empty installs `traffic-panel` in the directory where you ran the command, usually `/root/traffic-panel`. The panel is not installed under `/opt`. It starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it. If a parent directory such as `/root` blocks the service user, the installer adds execute permission for others on that parent so the service can enter the panel directory.
+The command opens a menu. Installation installs packages first, then asks for the directory and the first admin account. Leaving the directory empty installs `traffic-panel` in the current directory, usually `/root/traffic-panel`. The panel listens on port 443 without asking for a domain. It is not installed under `/opt`. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it. If a parent directory such as `/root` blocks the service user, the installer adds execute permission for others on that parent so the service can enter the panel directory.
+
+Menu, in order:
+
+1. Install
+2. Update
+3. Start
+4. Stop
+5. Restart
+6. View logs
+7. Domain and SSL
+8. Change port
+9. Status
+10. Uninstall
+
+Domain and SSL installs Nginx, requests a certificate, and keeps the panel on localhost. Port 80 must reach the server, and the domain must point at it. Changing the port changes the public port. With SSL, the application itself stays on an internal port.
 
 `sudo` without `-E` drops `http_proxy` and `https_proxy`. The installer also reads those variables from `/etc/environment` and from `Acquire::http::Proxy` and `Acquire::https::Proxy` in apt configuration, then passes them to git and pip.
-
-- Leave the domain empty to listen on port 8080 without TLS.
-- Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
 
 Update and remove:
 
@@ -29,15 +41,15 @@ Uninstall asks you to type `DELETE`. It then stops the service, deletes the inst
 The same commands work from a checkout:
 
 ```bash
-sudo bash install.sh
-sudo bash install.sh update
-sudo bash install.sh uninstall
+sudo -E bash install.sh
+sudo -E bash install.sh update
+sudo -E bash install.sh uninstall
 ```
 
 Non-interactive install:
 
 ```bash
-sudo bash install.sh install --admin admin --password 'a-long-password' --domain panel.example.com --email you@example.com
+sudo -E bash install.sh install --admin admin --password 'a-long-password' --port 443
 ```
 
 ## Requirements
