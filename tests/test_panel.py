@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app.models import Node, NodeCredential, TrafficHourlyAggregate, User
 from app.services.aggregates import refresh_hourly
@@ -219,3 +220,85 @@ def test_restart_keeps_data(client, admin, tmp_path, monkeypatch):
         listed = again.get("/api/v1/nodes")
         assert listed.json()["data"][0]["node_id"] == created["node_id"]
         assert again.get("/health").json()["ok"] is True
+
+
+def test_wrong_keys_do_not_spend_the_node_budget(client, admin):
+    created = _create_node(client, "budget")
+    saved = client.put("/api/v1/settings", json={"values": {"ingest_rate_limit": 10}})
+    assert saved.status_code == 200, saved.text
+    node_id = created["node_id"]
+    key = created["node_key"]
+    moment = datetime.now(timezone.utc)
+    for index in range(3):
+        rejected = client.post(
+            "/api/v1/ingest/metrics",
+            json=_payload(moment - timedelta(seconds=40 - index), f"nonce-wrong-key-{index:04d}", 10, 10),
+            headers=_headers(node_id, "nk_wrong-key-value", f"nonce-wrong-key-{index:04d}"),
+        )
+        assert rejected.status_code == 401
+    accepted = []
+    for index in range(10):
+        accepted.append(
+            _ingest(
+                client,
+                node_id,
+                key,
+                moment - timedelta(seconds=30 - index),
+                100 + index,
+                100,
+                f"nonce-budget-{index:04d}",
+            )
+        )
+    blocked = _ingest(client, node_id, key, moment + timedelta(seconds=5), 200, 160, "nonce-budget-over")
+    assert [item.status_code for item in accepted] == [200] * 10
+    assert blocked.status_code == 429
+
+
+def test_node_program_body_is_accepted(client, admin):
+    import importlib.util
+
+    source = Path(__file__).resolve().parents[2] / "TrafficNode" / "node.py"
+    spec = importlib.util.spec_from_file_location("traffic_node_contract", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    created = _create_node(client, "contract")
+    body, nonce = module.build_body(
+        {
+            "cpu_percent": 12.5,
+            "ram_total_bytes": 2_000_000,
+            "ram_used_bytes": 500_000,
+            "ram_free_bytes": 1_500_000,
+            "disk_total_bytes": 8_000_000,
+            "disk_used_bytes": 1_000_000,
+            "disk_free_bytes": 7_000_000,
+            "load_1": 0.1,
+            "load_5": 0.2,
+            "load_15": 0.3,
+            "uptime_seconds": 90,
+            "os_name": "Debian GNU/Linux 12",
+            "kernel_version": "6.8.0",
+            "interfaces": [
+                {
+                    "name": "eth0",
+                    "rx_bytes": 1000,
+                    "tx_bytes": 400,
+                    "rx_packets": 3,
+                    "tx_packets": 2,
+                    "rx_errors": 0,
+                    "tx_errors": 0,
+                    "rx_dropped": 0,
+                    "tx_dropped": 0,
+                }
+            ],
+        }
+    )
+    response = client.post(
+        "/api/v1/ingest/metrics",
+        json=body,
+        headers=_headers(created["node_id"], created["node_key"], nonce),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["duplicate"] is False
+    listed = client.get(f"/api/v1/nodes/{created['node_id']}")
+    assert listed.json()["data"]["status"] == "online"
+    assert listed.json()["data"]["agent_version"] == body["agent_version"]

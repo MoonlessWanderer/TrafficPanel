@@ -69,9 +69,11 @@ def require_node(request: Request) -> Node:
         raise AppError("unauthorized", "Node authentication is incomplete.", 401) from exc
     if abs(time.time() - timestamp) > settings.max_clock_skew_seconds:
         raise AppError("clock_skew", "The node clock is too far from the panel.", 401)
+    # A shared ceiling stops a flood from spending scrypt on every guess.
+    # It is separate from the per-node budget, which starts only after the key matches.
     rate_limiter.check(
-        f"ingest:{node_id}",
-        settings.ingest_rate_limit,
+        "ingest-attempt",
+        max(settings.ingest_rate_limit * 20, settings.ingest_rate_limit),
         settings.ingest_rate_window_seconds,
     )
     node = Node.get_or_none(Node.node_id == node_id)
@@ -105,6 +107,11 @@ def require_node(request: Request) -> Node:
         raise AppError("unauthorized", "The node id or key is not valid.", 401)
     if not node.is_enabled:
         raise AppError("node_disabled", "This node is disabled.", 403)
+    rate_limiter.check(
+        f"ingest:{node.node_id}",
+        settings.ingest_rate_limit,
+        settings.ingest_rate_window_seconds,
+    )
     request.state.node = node
     request.state.node_nonce = nonce
     return node
