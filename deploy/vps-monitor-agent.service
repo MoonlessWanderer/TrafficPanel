@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/vps-monitor/agent.env
-ExecStart=/usr/bin/python3.12 /opt/vps-monitor/vps_agent.py
+ExecStart=/usr/bin/python3 /opt/vps-monitor/vps_agent.py
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

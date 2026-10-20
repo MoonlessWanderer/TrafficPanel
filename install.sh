@@ -146,18 +146,26 @@ apt_install() {
 
 ensure_python() {
   apt_install ca-certificates curl git
-  if ! command -v python3.12 >/dev/null 2>&1 || ! python3.12 -m venv --help >/dev/null 2>&1; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    if [ "${ID:-}" = "ubuntu" ]; then
-      apt_install software-properties-common
-      add-apt-repository -y ppa:deadsnakes/ppa
-      apt-get update
-    fi
-    apt_install python3.12 python3.12-venv
+  local py version probe
+  if command -v python3 >/dev/null 2>&1; then
+    py="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1 && python -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)'; then
+    py="$(command -v python)"
+  else
+    die "Python 3 was not found. Install Python 3.9 or newer and run this again."
   fi
-  command -v python3.12 >/dev/null 2>&1 || die "Python 3.12 is not available from apt."
-  python3.12 -m venv --help >/dev/null 2>&1 || die "python3.12-venv is not installed."
+  version="$("$py" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
+  if ! "$py" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)'; then
+    die "Found Python ${version} at ${py}. This panel needs Python 3.9 or newer."
+  fi
+  probe="$(mktemp -d)"
+  if ! "$py" -m venv "${probe}/venv" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    die "Python ${version} at ${py} cannot create a virtual environment. Install the venv package for this interpreter and run this again. On Debian or Ubuntu: apt install python3-venv"
+  fi
+  rm -rf "$probe"
+  PYTHON="$py"
+  echo "Using Python ${version} at ${py}"
 }
 
 ensure_user() {
@@ -185,7 +193,7 @@ write_config() {
   COOKIE_SECURE_VALUE="$cookie_secure" \
   TRUSTED_VALUE="$trusted" \
   PORT_VALUE="$PORT" \
-  python3.12 - <<'PY'
+  "$PYTHON" - <<'PY'
 import os
 from pathlib import Path
 
@@ -229,7 +237,7 @@ PY
 
 preserve_config() {
   local saved="$1"
-  SAVED_CONFIG="$saved" APP_CONFIG="${APP_DIR}/config.py" python3.12 - <<'PY'
+  SAVED_CONFIG="$saved" APP_CONFIG="${APP_DIR}/config.py" "$PYTHON" - <<'PY'
 import ast
 import os
 from pathlib import Path
@@ -415,12 +423,12 @@ install_panel() {
   ensure_user
   git clone --depth 1 "$REPO" "$APP_DIR"
   chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
-  run_as_app python3.12 -m venv "${APP_DIR}/.venv"
+  run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
   run_as_app "${APP_DIR}/.venv/bin/pip" install --upgrade pip
   run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 
   local secret host_value cookie_secure trusted
-  secret="$(python3.12 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+  secret="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(48))')"
   if [ -n "$DOMAIN" ]; then
     host_value="127.0.0.1"
     cookie_secure="false"
@@ -479,7 +487,7 @@ update_panel() {
   preserve_config "$saved"
   rm -f "$saved"
   if [ ! -x "${APP_DIR}/.venv/bin/pip" ]; then
-    run_as_app python3.12 -m venv "${APP_DIR}/.venv"
+    run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
   fi
   run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
   systemctl restart "$SERVICE"

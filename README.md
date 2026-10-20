@@ -22,7 +22,7 @@ Update keeps `config.py` and the SQLite database. Uninstall removes the service,
 ## Local run
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -30,13 +30,13 @@ pip install -r requirements.txt
 Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `config.py` so the first admin can be created. Then:
 
 ```bash
-python3.12 main.py
+python3 main.py
 ```
 
-On Windows, if `python3.12` is not on PATH:
+On Windows, if `python3` is not on PATH:
 
 ```bash
-py -3.12 main.py
+py -3 main.py
 ```
 
 The panel listens on `http://127.0.0.1:8080` by default. Paths in `config.py` are relative to the project root.

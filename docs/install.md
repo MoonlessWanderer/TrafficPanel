@@ -8,7 +8,7 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
 ```
 
-The script installs Python 3.12, puts the whole panel in `/opt/traffic-panel`, and starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it.
+The script uses the server's `python3` when it is Python 3.9 or newer and can create a virtual environment. It puts the whole panel in `/opt/traffic-panel`, and starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it.
 
 - Leave the domain empty to listen on port 8080 without TLS.
 - Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
@@ -40,17 +40,17 @@ sudo bash install.sh install --admin admin --password 'a-long-password' --domain
 
 ## Requirements
 
-- Python 3.12
+- Python 3.9 or newer, including the venv module (`apt install python3-venv` on Debian or Ubuntu if it is missing)
 - Write access to the project directory for `data/` and `logs/`
 
 ## Steps
 
-1. Install dependencies: `python3.12 -m pip install -r requirements.txt`
+1. Install dependencies: `python3 -m pip install -r requirements.txt`
 2. Set `SECRET_KEY` in `config.py` to a random string of at least 32 characters.
 3. Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` for the first run only. The password must be at least 10 characters.
-4. Start the panel: `python3.12 main.py`
+4. Start the panel: `python3 main.py`
 
-On Windows, use `py -3.12 main.py` when `python3.12` is not on PATH.
+On Windows, use `py -3 main.py` when `python3` is not on PATH.
 
 If an admin already exists, a later start does not create another user. Data stays in SQLite.
 
@@ -74,5 +74,5 @@ A successful response means the database answered `SELECT 1`.
 ## Tests
 
 ```bash
-python3.12 -m pytest
+python3 -m pytest
 ```
