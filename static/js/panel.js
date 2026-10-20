@@ -519,7 +519,7 @@
     drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
     drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
     $("#top-nodes").innerHTML = data.top_nodes.length
-      ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
+      ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="empty">No data has been recorded for this range.</p>`;
     $("#top-groups").innerHTML = data.top_groups.length
       ? `<div class="table-wrap"><table><tbody>${data.top_groups.map((item) => `<tr><td><a href="/groups/${encodeURIComponent(item.id)}">${escapeHtml(item.name)}</a></td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
@@ -770,7 +770,7 @@
     drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
     drawBar("share-chart", data.ranking.map((item) => item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
-      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
+      ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     $("#rank-rows").onclick = async (event) => {
       const button = event.target.closest("[data-remove]");
