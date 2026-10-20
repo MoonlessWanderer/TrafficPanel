@@ -8,7 +8,7 @@ The supported install is `install.sh`. With no arguments it opens a menu. It kee
 sudo systemctl enable --now traffic-panel
 ```
 
-`deploy/vps-monitor-panel.service` matches that layout if you install by hand. SQLite and the in-process scheduler are built for one worker.
+The installer writes `traffic-panel.service` in that directory and links it into systemd. The first start creates the SQLite database. There is no migration. The in-process scheduler is built for one worker.
 
 ## HTTPS
 
