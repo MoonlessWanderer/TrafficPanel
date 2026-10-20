@@ -577,6 +577,7 @@ def _alert_payload(alert: Alert) -> dict:
         "id": alert.id,
         "node_id": alert.node.node_id if alert.node_id else None,
         "node_name": alert.node.name if alert.node_id else None,
+        "node_status": node_status(alert.node) if alert.node_id else None,
         "type": alert.alert_type,
         "severity": alert.severity,
         "status": alert.status,
@@ -949,7 +950,8 @@ def _node_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
     for node in nodes:
         points = _five_traffic_points([node.id], slots)
         data = [None if points.get(slot) is None else points[slot]["rx"] + points[slot]["tx"] for slot in slots]
-        datasets.append({"key": node.node_id, "label": node.name, "unit": "bytes", "data": data})
+        label = "Removed node" if node_status(node) == "removed" else node.name
+        datasets.append({"key": node.node_id, "label": label, "unit": "bytes", "data": data})
     return {"range": range_meta(filters, "5min"), "labels": labels, "datasets": datasets}
 
 

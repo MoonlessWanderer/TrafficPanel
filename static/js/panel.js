@@ -637,16 +637,16 @@
       api(`/api/v1/nodes/${nodeId}/samples?${queryString()}`),
     ]);
     const info = node.data;
-    $("#node-title").textContent = info.name;
+    const removed = info.status === "removed";
+    $("#node-title").textContent = removed ? "Removed node" : info.name;
     const subtitle = [info.node_id, `Version ${info.agent_version || "—"}`];
     if (info.os_name) subtitle.push(info.os_name);
     $("#node-sub").textContent = subtitle.join(" · ");
-    const removed = info.status === "removed";
     ["install-command-btn", "rotate-key", "toggle-node", "revoke-key", "delete-node"].forEach((id) => {
       const button = document.getElementById(id);
       if (button) button.hidden = removed;
     });
-    if (removed) $("#node-sub").textContent = `${info.name} was removed. Its traffic and resource history is kept.`;
+    if (removed) $("#node-sub").textContent = "This node was removed. Its traffic and resource history is kept.";
     const block = stats.data.traffic;
     const res = stats.data.resources;
     $("#node-cards").innerHTML = [
@@ -768,7 +768,7 @@
       card("Disk capacity", data.disk.total_text?.text || "—", data.disk.used_text ? `Used ${data.disk.used_text.text}` : ""),
     ].join("");
     drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
-    drawBar("share-chart", data.ranking.map((item) => item.name), data.ranking.map((item) => item.share_percent || 0));
+    drawBar("share-chart", data.ranking.map((item) => item.status === "removed" ? "Removed node" : item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
       ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
@@ -870,7 +870,10 @@
         const result = await api(`${path}?${next.toString()}`);
         drawChart("compare-chart", result.data.chart.labels, result.data.chart.datasets, "bytes");
         const rows = result.data.items.map((item) => {
-          if (item.node) return `<tr><td>${escapeHtml(item.node.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
+          if (item.node) {
+            const name = item.node.status === "removed" ? "Removed node" : item.node.name;
+            return `<tr><td>${escapeHtml(name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
+          }
           return `<tr><td>${escapeHtml(item.group.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
         }).join("");
         $("#compare-table").innerHTML = `<table><thead><tr><th>Name</th><th>Traffic</th><th>CPU</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -898,7 +901,7 @@
     setState("Loading…");
     const result = await api(`/api/v1/alerts?${queryString()}`);
     $("#alert-rows").innerHTML = result.data.length
-      ? result.data.map((item) => `<tr><td>${formatWhen(item.opened_at)}</td><td>${escapeHtml(item.node_name || "—")}</td><td>${escapeHtml(alertLabels[item.type] || item.type)}</td><td>${escapeHtml(item.message)}</td><td><span class="pill ${item.status === "open" ? "open" : "resolved"}">${item.status === "open" ? "Open" : "Closed"}</span></td><td>${item.status === "open" ? `<button class="btn ghost" type="button" data-resolve="${escapeHtml(item.id)}">Close</button>` : escapeHtml(item.resolution || "")}</td></tr>`).join("")
+      ? result.data.map((item) => `<tr><td>${formatWhen(item.opened_at)}</td><td>${escapeHtml(item.node_status === "removed" ? "Removed node" : (item.node_name || "—"))}</td><td>${escapeHtml(alertLabels[item.type] || item.type)}</td><td>${escapeHtml(item.message)}</td><td><span class="pill ${item.status === "open" ? "open" : "resolved"}">${item.status === "open" ? "Open" : "Closed"}</span></td><td>${item.status === "open" ? `<button class="btn ghost" type="button" data-resolve="${escapeHtml(item.id)}">Close</button>` : escapeHtml(item.resolution || "")}</td></tr>`).join("")
       : "";
     setState(result.data.length ? "" : "No alerts in this view.");
     $("#alert-rows").onclick = async (event) => {
