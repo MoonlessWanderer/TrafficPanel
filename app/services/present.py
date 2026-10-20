@@ -123,7 +123,7 @@ def group_payload(group: NodeGroup, *, with_counts: bool = True) -> dict:
         members = list(
             Node.select()
             .join(NodeGroupMembership)
-            .where(NodeGroupMembership.group == group)
+            .where((NodeGroupMembership.group == group) & (Node.deleted_at.is_null(True)))
         )
         payload["members"] = len(members)
         payload["online"] = sum(1 for node in members if node_status(node) == "online")

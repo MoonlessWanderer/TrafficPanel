@@ -192,4 +192,7 @@ def revoke_key(node_id: str, *, actor_id: str, ip_address: str | None) -> dict:
 
 
 def get_node(node_id: str) -> Node:
-    return _get_node(node_id)
+    node = _get_node(node_id)
+    if node.deleted_at is not None:
+        raise AppError("not_found", "Node not found.", 404)
+    return node

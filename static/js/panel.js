@@ -539,7 +539,7 @@
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
     $("#top-nodes").innerHTML = data.top_nodes.length
-      ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
+      ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="empty">No data has been recorded for this range.</p>`;
     $("#top-groups").innerHTML = data.top_groups.length
       ? `<div class="table-wrap"><table><tbody>${data.top_groups.map((item) => `<tr><td><a href="/groups/${encodeURIComponent(item.id)}">${escapeHtml(item.name)}</a></td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
@@ -649,24 +649,27 @@
   async function loadNode() {
     const nodeId = document.body.dataset.nodeId;
     setState("Loading…");
-    const [node, stats, traffic, resources, samples] = await Promise.all([
-      api(`/api/v1/nodes/${nodeId}`),
-      api(`/api/v1/nodes/${nodeId}/stats?${queryString()}`),
-      api(`/api/v1/charts/traffic?${queryString()}&node_ids=${nodeId}`),
-      api(`/api/v1/charts/resources?${queryString()}&node_ids=${nodeId}`),
-      api(`/api/v1/nodes/${nodeId}/samples?${queryString()}`),
-    ]);
+    let node, stats, traffic, resources, samples;
+    try {
+      [node, stats, traffic, resources, samples] = await Promise.all([
+        api(`/api/v1/nodes/${nodeId}`),
+        api(`/api/v1/nodes/${nodeId}/stats?${queryString()}`),
+        api(`/api/v1/charts/traffic?${queryString()}&node_ids=${nodeId}`),
+        api(`/api/v1/charts/resources?${queryString()}&node_ids=${nodeId}`),
+        api(`/api/v1/nodes/${nodeId}/samples?${queryString()}`),
+      ]);
+    } catch (error) {
+      if (error.status === 404) {
+        location.replace("/nodes");
+        return;
+      }
+      throw error;
+    }
     const info = node.data;
-    const removed = info.status === "removed";
-    $("#node-title").textContent = removed ? "Removed node" : info.name;
+    $("#node-title").textContent = info.name;
     const subtitle = [info.node_id, `Version ${info.agent_version || "—"}`];
     if (info.os_name) subtitle.push(info.os_name);
     $("#node-sub").textContent = subtitle.join(" · ");
-    ["install-command-btn", "rotate-key", "toggle-node", "revoke-key", "delete-node"].forEach((id) => {
-      const button = document.getElementById(id);
-      if (button) button.hidden = removed;
-    });
-    if (removed) $("#node-sub").textContent = "This node was removed. Its traffic and resource history is kept.";
     const block = stats.data.traffic;
     $("#node-cards").innerHTML = [
       card("Status", statusPill(info.status, info.stale), info.last_seen_at ? formatWhen(info.last_seen_at) : "No report has been received yet."),
@@ -723,7 +726,7 @@
       load();
     };
     $("#delete-node").onclick = async () => {
-      if (!await confirmBox("Delete node", "Remove this node from the list? Recorded traffic and resource history stays.", "Delete", true)) return;
+      if (!await confirmBox("Delete node", "Remove this node from the panel? It stops reporting and leaves every list and chart.", "Delete", true)) return;
       await api(`/api/v1/nodes/${nodeId}`, { method: "DELETE" });
       location.href = "/nodes";
     };
@@ -774,10 +777,9 @@
       card("Upload", textOf(trafficBlock, "tx_text"), nowHint(trafficBlock.tx_bps_now_text?.text)),
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
-    drawBar("share-chart", data.ranking.map((item) => item.status === "removed" ? "Removed node" : item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
-      ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
-      : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
+      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
+      : `<tr><td colspan="7">No data has been recorded for this range.</td></tr>`;
     $("#rank-rows").onclick = async (event) => {
       const button = event.target.closest("[data-remove]");
       if (!button) return;
@@ -878,7 +880,7 @@
         const comparingNodes = result.data.items.some((item) => item.node);
         const rows = result.data.items.map((item) => {
           if (item.node) {
-            const name = item.node.status === "removed" ? "Removed node" : item.node.name;
+            const name = item.node.name;
             const cpu = item.node.cpu_percent == null ? "—" : `${item.node.cpu_percent.toFixed(1)}%`;
             return `<tr><td>${escapeHtml(name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${cpu}</td></tr>`;
           }
@@ -910,7 +912,7 @@
     setState("Loading…");
     const result = await api(`/api/v1/alerts?${queryString()}`);
     $("#alert-rows").innerHTML = result.data.length
-      ? result.data.map((item) => `<tr><td>${formatWhen(item.opened_at)}</td><td>${escapeHtml(item.node_status === "removed" ? "Removed node" : (item.node_name || "—"))}</td><td>${escapeHtml(alertLabels[item.type] || item.type)}</td><td>${escapeHtml(item.message)}</td><td><span class="pill ${item.status === "open" ? "open" : "resolved"}">${item.status === "open" ? "Open" : "Closed"}</span></td><td>${item.status === "open" ? `<button class="btn ghost" type="button" data-resolve="${escapeHtml(item.id)}">Close</button>` : escapeHtml(item.resolution || "")}</td></tr>`).join("")
+      ? result.data.map((item) => `<tr><td>${formatWhen(item.opened_at)}</td><td>${escapeHtml(item.node_name || "—")}</td><td>${escapeHtml(alertLabels[item.type] || item.type)}</td><td>${escapeHtml(item.message)}</td><td><span class="pill ${item.status === "open" ? "open" : "resolved"}">${item.status === "open" ? "Open" : "Closed"}</span></td><td>${item.status === "open" ? `<button class="btn ghost" type="button" data-resolve="${escapeHtml(item.id)}">Close</button>` : escapeHtml(item.resolution || "")}</td></tr>`).join("")
       : "";
     setState(result.data.length ? "" : "No alerts in this view.");
     $("#alert-rows").onclick = async (event) => {

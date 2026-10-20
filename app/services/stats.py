@@ -74,7 +74,7 @@ def range_meta(filters: QueryFilters, bucket: str | None = None) -> dict:
 
 
 def structural_query(filters: QueryFilters):
-    query = Node.select()
+    query = Node.select().where(Node.deleted_at.is_null(True))
     if filters.node_ids:
         query = query.where(Node.node_id.in_(filters.node_ids))
     if filters.group_ids:
@@ -1180,7 +1180,7 @@ def _node_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
     for node in nodes:
         points = _traffic_points([node.id], slots, bucket, filters.end)
         data = [None if points.get(slot) is None else points[slot]["rx"] + points[slot]["tx"] for slot in slots]
-        label = "Removed node" if node_status(node) == "removed" else node.name
+        label = node.name
         datasets.append({"key": node.node_id, "label": label, "unit": "bytes", "data": data})
     return {"range": range_meta(filters, bucket), "labels": labels, "datasets": datasets}
 
@@ -1536,15 +1536,14 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
     nodes, traffic, resources = matching_nodes(narrowed)
     nodes = [node for node in nodes if node.id in member_ids]
     ranking = []
-    total_bytes = 0
     known = []
     for node in nodes:
+        if node.deleted_at is not None:
+            continue
         block = _traffic_public(traffic.get(node.id))
         if block["has_data"]:
             known.append((node, block))
-            total_bytes += block["total_bytes"] or 0
     for node, block in sorted(known, key=lambda item: item[1]["total_bytes"] or 0, reverse=True):
-        share = None if not total_bytes else (block["total_bytes"] / total_bytes) * 100
         ranking.append(
             {
                 "node_id": node.node_id,
@@ -1553,8 +1552,9 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
                 "rx_bytes": block["rx_bytes"],
                 "tx_bytes": block["tx_bytes"],
                 "total_bytes": block["total_bytes"],
+                "rx_text": block["rx_text"],
+                "tx_text": block["tx_text"],
                 "total_text": block["total_text"],
-                "share_percent": share,
                 "cpu_percent": node.last_cpu_percent,
             }
         )
@@ -1563,7 +1563,7 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
         {"node_id": node.node_id, "name": node.name}
         for node in Node.select()
         .join(NodeGroupMembership)
-        .where(NodeGroupMembership.group == group)
+        .where((NodeGroupMembership.group == group) & (Node.deleted_at.is_null(True)))
         .order_by(Node.name)
     ]
     return {
@@ -1621,7 +1621,9 @@ def compare_groups(filters: QueryFilters) -> dict:
 
 
 def list_alerts(filters: QueryFilters, status: str | None) -> dict:
-    query = Alert.select()
+    query = Alert.select().where(
+        Alert.node.is_null(True) | Alert.node.in_(Node.select(Node.id).where(Node.deleted_at.is_null(True)))
+    )
     if status in {"open", "resolved"}:
         query = query.where(Alert.status == status)
     nodes, _traffic, _resources = matching_nodes(filters)

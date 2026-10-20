@@ -172,6 +172,10 @@ def test_group_stats_follow_membership(client, admin):
     _ingest(client, beta["node_id"], beta["node_key"], now, 3_000, 0, "nonce-beta-000002", cpu=10)
     before = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
     assert before["traffic"]["rx_bytes"] == 4_000
+    ranked = sorted(before["ranking"], key=lambda item: item["rx_bytes"], reverse=True)
+    assert ranked[0]["rx_bytes"] == 3_000
+    assert ranked[0]["tx_bytes"] == 0
+    assert "share_percent" not in ranked[0]
     assert abs(before["traffic"]["rx_bps_avg"] - (1_000 / 30 + 3_000 / 30)) < 0.1
     assert abs(before["traffic"]["rx_bps_now"] - (1_000 / 30 + 3_000 / 30)) < 0.1
     assert before["counts"]["online"] == 2
@@ -469,18 +473,17 @@ def test_removed_node_keeps_its_history(client, admin):
     assert removed.status_code == 200, removed.text
     listed = client.get("/api/v1/nodes").json()["data"]
     assert node_id not in [item["node_id"] for item in listed]
-    detail = client.get(f"/api/v1/nodes/{node_id}").json()["data"]
-    assert detail["status"] == "removed"
-    stats = client.get(f"/api/v1/nodes/{node_id}/stats?preset=1h").json()["data"]
-    assert stats["traffic"]["rx_bytes"] == 600
-    assert stats["traffic"]["tx_bytes"] == 300
+    assert client.get(f"/api/v1/nodes/{node_id}").status_code == 404
+    assert client.get(f"/api/v1/nodes/{node_id}/stats?preset=1h").status_code == 404
     dashboard = client.get("/api/v1/dashboard/summary?preset=1h").json()["data"]
-    assert dashboard["traffic"]["rx_bytes"] == 600
+    assert dashboard["traffic"]["has_data"] is False
     assert dashboard["nodes"]["total"] == 0
+    assert dashboard["top_nodes"] == []
     group_stats = client.get(f"/api/v1/groups/{group['id']}/stats?preset=1h").json()["data"]
-    assert group_stats["traffic"]["rx_bytes"] == 600
-    assert group_stats["members"][0]["node_id"] == node_id
-    assert group_stats["ranking"][0]["status"] == "removed"
+    assert group_stats["traffic"]["has_data"] is False
+    assert group_stats["members"] == []
+    assert group_stats["ranking"] == []
+    assert group_stats["counts"]["total"] == 0
     assert _ingest(client, node_id, key, now + timedelta(seconds=30), 2_000, 800, "nonce-kept-0000003").status_code == 401
     assert client.post(f"/api/v1/nodes/{node_id}/enable").status_code == 409
 
