@@ -184,9 +184,7 @@ def test_group_stats_follow_membership(client, admin):
     assert abs(before["traffic"]["rx_bps_now"] - (1_000 / 30 + 3_000 / 30)) < 0.1
     assert before["counts"]["online"] == 2
     chart = client.get(f"/api/v1/charts/traffic?preset=1h&group_ids={group_id}").json()["data"]
-    speeds = [value for value in chart["datasets"][2]["data"] if value]
-    assert speeds
-    assert abs(sum(speeds) - (1_000 / 30 + 3_000 / 30)) < 0.1
+    assert [value for value in chart["datasets"][2]["data"] if value] == []
     blocked = client.delete(f"/api/v1/groups/{group_id}")
     assert blocked.status_code == 409
     renamed = client.patch(f"/api/v1/nodes/{alpha['node_id']}", json={"name": "alpha-renamed"})
@@ -277,8 +275,9 @@ def test_virtual_interfaces_are_left_out_of_traffic(client, admin):
         ]
         return client.post("/api/v1/ingest/metrics", json=payload, headers=_headers(node_id, key, nonce))
 
-    assert send(now - timedelta(seconds=30), 1_000, 1_000, 50_000, 50_000, "nonce-uplink-00001").status_code == 200
-    assert send(now, 1_500, 1_300, 90_000, 80_000, "nonce-uplink-00002").status_code == 200
+    closed = now - timedelta(minutes=10)
+    assert send(closed - timedelta(seconds=30), 1_000, 1_000, 50_000, 50_000, "nonce-uplink-00001").status_code == 200
+    assert send(closed, 1_500, 1_300, 90_000, 80_000, "nonce-uplink-00002").status_code == 200
     stats = client.get(f"/api/v1/nodes/{node_id}/stats?preset=1h").json()["data"]
     assert stats["traffic"]["rx_bytes"] == 500
     assert stats["traffic"]["tx_bytes"] == 300
@@ -297,7 +296,7 @@ def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
     key = created["node_key"]
     now = datetime.now(timezone.utc).replace(microsecond=0)
     for hour in range(5):
-        start = now - timedelta(hours=5 - hour, seconds=40)
+        start = now - timedelta(hours=12 - hour, seconds=40)
         nonce_a = f"nonce-hist-a-{hour:04d}"
         nonce_b = f"nonce-hist-b-{hour:04d}"
         assert _ingest(client, node_id, key, start, 1_000_000 + hour * 10_000, 500_000, nonce_a).status_code == 200
@@ -325,20 +324,24 @@ def _label_gaps(labels: list[str]) -> list[float]:
 
 
 def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch):
-    from app.utils.time import as_utc, local_hour_start, utcnow
+    from app.utils.time import as_utc, utcnow
     import app.services.ingest as ingest
 
     monkeypatch.setattr(ingest, "_checked_time", lambda collected_at: (as_utc(collected_at), utcnow()))
     created = _create_node(client, "coarse")
     node_id = created["node_id"]
     key = created["node_key"]
-    anchor = local_hour_start(datetime.now(timezone.utc) - timedelta(hours=2)).replace(tzinfo=timezone.utc)
-    first = anchor + timedelta(minutes=55)
-    second = anchor + timedelta(hours=1, minutes=4)
-    assert _ingest(client, node_id, key, first, 0, 0, "nonce-coarse-0001", cpu=10).status_code == 200
-    assert _ingest(client, node_id, key, first + timedelta(seconds=30), 2_400, 0, "nonce-coarse-0002", cpu=40).status_code == 200
-    assert _ingest(client, node_id, key, second, 2_400, 0, "nonce-coarse-0003", cpu=15).status_code == 200
-    assert _ingest(client, node_id, key, second + timedelta(seconds=30), 3_000, 0, "nonce-coarse-0004", cpu=55).status_code == 200
+    now = datetime.now(timezone.utc)
+    older = now - timedelta(hours=8)
+    recent = now - timedelta(minutes=40)
+    assert _ingest(client, node_id, key, older, 0, 0, "nonce-coarse-0001", cpu=10).status_code == 200
+    assert _ingest(client, node_id, key, older + timedelta(seconds=30), 2_400, 0, "nonce-coarse-0002", cpu=40).status_code == 200
+    assert _ingest(client, node_id, key, older + timedelta(minutes=4), 2_400, 0, "nonce-coarse-0003", cpu=15).status_code == 200
+    assert _ingest(client, node_id, key, older + timedelta(minutes=4, seconds=30), 3_000, 0, "nonce-coarse-0004", cpu=55).status_code == 200
+    assert _ingest(client, node_id, key, recent, 3_000, 0, "nonce-coarse-0005", cpu=10).status_code == 200
+    assert _ingest(client, node_id, key, recent + timedelta(seconds=30), 5_400, 0, "nonce-coarse-0006", cpu=40).status_code == 200
+    assert _ingest(client, node_id, key, recent + timedelta(minutes=9), 5_400, 0, "nonce-coarse-0007", cpu=15).status_code == 200
+    assert _ingest(client, node_id, key, recent + timedelta(minutes=9, seconds=30), 6_000, 0, "nonce-coarse-0008", cpu=55).status_code == 200
 
     fine = client.get(f"/api/v1/charts/traffic?preset=6h&node_ids={node_id}").json()["data"]
     assert fine["range"]["bucket"] == "720"
@@ -350,10 +353,16 @@ def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch)
     assert week["range"]["bucket"] == "20160"
     assert len(week["labels"]) == 30
     assert set(_label_gaps(week["labels"])) == {20160}
-    assert sum(value for value in week["datasets"][0]["data"] if value) == 3_000
+    from app.services.stats import _epoch_closed_end
+
+    week_closed = _epoch_closed_end(datetime.now(timezone.utc).replace(tzinfo=None), 20160).replace(tzinfo=timezone.utc)
+    expected_week = 6_000 if recent < week_closed else 3_000
+    assert sum(value for value in week["datasets"][0]["data"] if value) == expected_week
     cpu = client.get(f"/api/v1/charts/resources?preset=7d&node_ids={node_id}").json()["data"]
     assert cpu["range"]["bucket"] == "20160"
-    assert [value for value in cpu["datasets"][0]["data"] if value is not None] == [55]
+    cpu_values = [value for value in cpu["datasets"][0]["data"] if value is not None]
+    assert cpu_values
+    assert set(cpu_values) == {55}
 
     month = client.get("/api/v1/charts/traffic?preset=30d").json()["data"]
     assert month["range"]["bucket"] == "86400"
@@ -366,7 +375,12 @@ def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch)
     yesterday = client.get("/api/v1/charts/traffic?preset=yesterday").json()["data"]
     assert yesterday["range"]["bucket"] == "2880"
     assert len(yesterday["labels"]) == 30
-    assert len(client.get("/api/v1/charts/traffic?preset=month").json()["data"]["labels"]) == 30
+    this_month = client.get("/api/v1/charts/traffic?preset=month").json()["data"]
+    assert this_month["range"]["bucket"] == "86400"
+    assert 1 <= len(this_month["labels"]) <= 30
+    assert set(_label_gaps(this_month["labels"])) == {86400}
+    last_month_point = datetime.fromisoformat(this_month["labels"][-1].replace("Z", "+00:00"))
+    assert last_month_point + timedelta(days=1) <= datetime.now(timezone.utc)
 
     now = datetime.now(timezone.utc)
     custom_hour = client.get(
@@ -391,16 +405,23 @@ def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch)
     assert set(_label_gaps(custom_month["labels"])) == {28800}
 
 
-def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admin):
+def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admin, monkeypatch):
+    frozen = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    boundary = frozen.replace(minute=(frozen.minute // 5) * 5, second=0)
+    if (frozen - boundary).total_seconds() < 180:
+        frozen = boundary + timedelta(minutes=3)
+    monkeypatch.setattr("app.utils.time.utcnow", lambda: frozen)
+    monkeypatch.setattr("app.services.stats.utcnow", lambda: frozen)
+    monkeypatch.setattr("app.services.ingest.utcnow", lambda: frozen)
     created = _create_node(client, "bucket")
     node_id = created["node_id"]
     key = created["node_key"]
-    moment = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    anchor = moment.replace(minute=(moment.minute // 5) * 5)
-    if (datetime.now(timezone.utc) - anchor).total_seconds() < 45:
-        anchor -= timedelta(minutes=5)
+    anchor = (boundary - timedelta(minutes=5)).replace(tzinfo=timezone.utc)
+    open_bucket = boundary.replace(tzinfo=timezone.utc)
     assert _ingest(client, node_id, key, anchor + timedelta(seconds=5), 1_000, 1_000, "nonce-bucket-0001", cpu=10).status_code == 200
     assert _ingest(client, node_id, key, anchor + timedelta(seconds=35), 1_600, 1_250, "nonce-bucket-0002", cpu=30).status_code == 200
+    assert _ingest(client, node_id, key, open_bucket + timedelta(seconds=5), 1_600, 1_250, "nonce-bucket-0003", cpu=90).status_code == 200
+    assert _ingest(client, node_id, key, open_bucket + timedelta(seconds=35), 11_600, 1_250, "nonce-bucket-0004", cpu=90).status_code == 200
     chart = client.get(f"/api/v1/charts/traffic?preset=1h&node_ids={node_id}")
     assert chart.status_code == 200, chart.text
     body = chart.json()["data"]
@@ -413,6 +434,9 @@ def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admi
     cpu = [value for value in resources["datasets"][0]["data"] if value is not None]
     assert resources["datasets"][0]["label"] == "CPU"
     assert cpu == [30]
+    assert _ingest(client, node_id, key, open_bucket + timedelta(seconds=50), 21_600, 1_250, "nonce-bucket-0005", cpu=90).status_code == 200
+    again = client.get(f"/api/v1/charts/traffic?preset=1h&node_ids={node_id}").json()["data"]
+    assert [value for value in again["datasets"][0]["data"] if value] == [600]
     six = client.get("/api/v1/charts/traffic?preset=6h")
     assert six.status_code == 200
     assert len(six.json()["data"]["labels"]) == 30
@@ -495,7 +519,7 @@ def test_removed_node_keeps_its_history(client, admin):
     node_id = created["node_id"]
     key = created["node_key"]
     assert client.delete(f"/api/v1/groups/{group['id']}").status_code == 409
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) - timedelta(minutes=10)
     assert _ingest(client, node_id, key, now - timedelta(seconds=30), 1_000, 400, "nonce-kept-0000001").status_code == 200
     assert _ingest(client, node_id, key, now, 1_600, 700, "nonce-kept-0000002").status_code == 200
     removed = client.delete(f"/api/v1/nodes/{node_id}")

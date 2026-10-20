@@ -29,6 +29,7 @@ from app.services.present import group_payload, node_is_stale, node_payload, nod
 from app.utils.jsonbox import load_json
 from app.utils.time import (
     as_utc,
+    five_minute_bucket,
     five_minute_slots,
     hour_bucket,
     isoformat,
@@ -849,47 +850,83 @@ def _raw_points(node_ids: list[int], filters: QueryFilters) -> tuple[list[str], 
     return labels, columns
 
 
-def _chart_bounds(filters: QueryFilters) -> tuple[datetime, datetime]:
-    earliest = utcnow() - timedelta(days=int(settings.five_minute_retention_days))
-    start = max(as_utc(filters.start), earliest)
-    end = as_utc(filters.end)
-    if start >= end:
-        return end, end
-    return start, end
-
-
-def _prepare_five_minute(filters: QueryFilters) -> list[datetime]:
-    start, end = _chart_bounds(filters)
-    if start < end:
-        refresh_five_minute(start, end)
-    return five_minute_slots(start, end)
-
-
 _POINT_LIMIT = 30
 _MIN_STEP = timedelta(minutes=5)
+_EPOCH = datetime(1970, 1, 1)
+# این بازه‌ها انتهایشان «الان» است. نقطهٔ ناتمام را نشان نمی‌دهیم، وگرنه چند دقیقه بعد همان نقطه بزرگ‌تر می‌شود.
+_ROLLING = {"1h", "6h", "24h", "7d", "30d"}
+
+
+def _five_minute_closed_end(end: datetime) -> datetime:
+    end = as_utc(end).replace(microsecond=0)
+    boundary = five_minute_bucket(end)
+    return end if boundary == end else boundary
+
+
+def _epoch_closed_end(end: datetime, step_seconds: int) -> datetime:
+    end = as_utc(end).replace(microsecond=0)
+    seconds = int((end - _EPOCH).total_seconds())
+    return _EPOCH + timedelta(seconds=(seconds // step_seconds) * step_seconds)
+
+
+def _finished_slots(origin: datetime, end: datetime, step_seconds: int) -> list[datetime]:
+    """گام‌هایی که کاملاً تمام شده‌اند. گام جاری که هنوز بسته نشده در نمودار نمی‌آید."""
+    origin = as_utc(origin).replace(microsecond=0)
+    end = as_utc(end).replace(microsecond=0)
+    total = max(0, int((end - origin).total_seconds()) // step_seconds)
+    begin = max(0, total - _POINT_LIMIT)
+    return [origin + timedelta(seconds=step_seconds * (begin + index)) for index in range(total - begin)]
+
+
+def _refresh_chart(start: datetime, end: datetime) -> None:
+    if start < end:
+        refresh_five_minute(start, end)
 
 
 def _chart_slots(filters: QueryFilters) -> tuple[str, list[datetime], datetime, int]:
-    """حداکثر ۳۰ نقطه. فاصله از ۵ دقیقه کوتاه‌تر نمی‌شود، پس یک ساعت همان ۱۲ نقطه است."""
+    """حداکثر ۳۰ نقطهٔ بسته‌شده. فاصله از ۵ دقیقه کوتاه‌تر نمی‌شود، پس یک ساعت همان ۱۲ نقطه است."""
     start = as_utc(filters.start).replace(microsecond=0)
     end = as_utc(filters.end).replace(microsecond=0)
     span = end - start
+    if filters.preset == "today":
+        if span <= _MIN_STEP * _POINT_LIMIT:
+            closed = _five_minute_closed_end(end)
+            _refresh_chart(start, closed)
+            return "5min", five_minute_slots(start, closed), start, 0
+        step_s = 24 * 3600 // _POINT_LIMIT
+        slots = _finished_slots(start, end, step_s)
+        _refresh_chart(slots[0] if slots else start, end)
+        return str(step_s), slots, slots[0] if slots else start, step_s * 1_000_000
+    if filters.preset == "month":
+        if span <= _MIN_STEP * _POINT_LIMIT:
+            closed = _five_minute_closed_end(end)
+            _refresh_chart(start, closed)
+            return "5min", five_minute_slots(start, closed), start, 0
+        step_s = 24 * 3600
+        slots = _finished_slots(start, end, step_s)
+        _refresh_chart(slots[0] if slots else start, end)
+        return str(step_s), slots, slots[0] if slots else start, step_s * 1_000_000
     if span <= _MIN_STEP * _POINT_LIMIT:
-        return "5min", _prepare_five_minute(filters), start, 0
-    span_us = int(round(span.total_seconds() * 1_000_000))
-    slots = [start + timedelta(microseconds=(span_us * index) // _POINT_LIMIT) for index in range(_POINT_LIMIT)]
-    bounded_start, bounded_end = _chart_bounds(filters)
-    if bounded_start < bounded_end:
-        refresh_five_minute(bounded_start, bounded_end)
-    return str(max(1, round(span.total_seconds() / _POINT_LIMIT))), slots, start, span_us
+        if filters.preset in _ROLLING:
+            end = _five_minute_closed_end(end)
+            start = end - span
+        _refresh_chart(start, end)
+        return "5min", five_minute_slots(start, end), start, 0
+    step_s = max(1, round(span.total_seconds() / _POINT_LIMIT))
+    if filters.preset in _ROLLING:
+        end = _epoch_closed_end(end, step_s)
+        start = end - timedelta(seconds=step_s * _POINT_LIMIT)
+    slots = [start + timedelta(seconds=step_s * index) for index in range(_POINT_LIMIT)]
+    _refresh_chart(start, as_utc(filters.end))
+    return str(step_s), slots, start, step_s * 1_000_000
 
 
-def _slot_index(moment: datetime, start: datetime, span_us: int) -> int | None:
+def _slot_index(moment: datetime, start: datetime, step_us: int, limit: int) -> int | None:
     offset = int(round((as_utc(moment) - start).total_seconds() * 1_000_000))
-    if offset < 0 or span_us <= 0:
+    if offset < 0 or step_us <= 0:
         return None
-    index = offset * _POINT_LIMIT // span_us
-    if index < 0 or index >= _POINT_LIMIT:
+    index = offset // step_us
+    if index < 0 or index >= limit:
         return None
     return index
 
@@ -932,11 +969,11 @@ def _sum_iface_slots(rows, allowed: set[datetime]) -> dict[datetime, dict]:
     return points
 
 
-def _rows_on_slots(node_ids: list[int], slots: list[datetime], start: datetime, end: datetime, span_us: int) -> list:
-    if not node_ids or not slots or start >= end:
+def _rows_on_slots(node_ids: list[int], slots: list[datetime], start: datetime, step_us: int) -> list:
+    if not node_ids or not slots or step_us <= 0:
         return []
     ph = _placeholders(len(node_ids))
-    end = start + timedelta(microseconds=span_us)
+    end = start + timedelta(microseconds=step_us * len(slots))
     earliest = utcnow() - timedelta(days=int(settings.five_minute_retention_days))
     folded = []
     if earliest < end:
@@ -950,7 +987,7 @@ def _rows_on_slots(node_ids: list[int], slots: list[datetime], start: datetime, 
         for node_id, iface, moment, rx, tx, dur, count in db.execute_sql(
             sql, [window_start, end, *node_ids]
         ).fetchall():
-            index = _slot_index(_parse_dt(moment), start, span_us)
+            index = _slot_index(_parse_dt(moment), start, step_us, len(slots))
             if index is None:
                 continue
             folded.append((node_id, iface, slots[index], rx, tx, dur, count))
@@ -964,17 +1001,17 @@ def _rows_on_slots(node_ids: list[int], slots: list[datetime], start: datetime, 
               AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
         """
         for node_id, iface, moment, rx, tx, dur, count in db.execute_sql(sql, [start, earliest, *node_ids]).fetchall():
-            index = _slot_index(_parse_dt(moment), start, span_us)
+            index = _slot_index(_parse_dt(moment), start, step_us, len(slots))
             if index is None:
                 continue
             folded.append((node_id, iface, slots[index], rx, tx, dur, count))
     return folded
 
 
-def _traffic_points(node_ids: list[int], slots: list[datetime], bucket: str, start: datetime, end: datetime, span_us: int) -> dict[datetime, dict]:
+def _traffic_points(node_ids: list[int], slots: list[datetime], bucket: str, start: datetime, step_us: int) -> dict[datetime, dict]:
     if bucket == "5min":
         return _five_traffic_points(node_ids, slots)
-    return _sum_iface_slots(_rows_on_slots(node_ids, slots, start, end, span_us), set(slots))
+    return _sum_iface_slots(_rows_on_slots(node_ids, slots, start, step_us), set(slots))
 
 
 def _five_traffic_points(node_ids: list[int], slots: list[datetime]) -> dict[datetime, dict]:
@@ -1072,8 +1109,8 @@ def _traffic_datasets(columns: dict[str, list]) -> list[dict]:
 
 def traffic_chart(filters: QueryFilters) -> dict:
     nodes, _traffic, _resources = matching_nodes(filters, include_removed=not filters.node_ids)
-    bucket, slots, start, span_us = _chart_slots(filters)
-    points = _traffic_points([node.id for node in nodes], slots, bucket, start, filters.end, span_us)
+    bucket, slots, start, step_us = _chart_slots(filters)
+    points = _traffic_points([node.id for node in nodes], slots, bucket, start, step_us)
     packed = _series_from_points(slots, points, ["rx", "tx", "rx_bps", "tx_bps"])
     return {
         "range": range_meta(filters, bucket),
@@ -1121,12 +1158,12 @@ def _resource_point(cpu, ram, disk, count: int) -> dict:
 
 
 def _coarse_resource_points(
-    node_ids: list[int], slots: list[datetime], start: datetime, end: datetime, span_us: int
+    node_ids: list[int], slots: list[datetime], start: datetime, step_us: int
 ) -> dict[datetime, dict]:
-    if not node_ids or not slots:
+    if not node_ids or not slots or step_us <= 0:
         return {}
     ph = _placeholders(len(node_ids))
-    end = start + timedelta(microseconds=span_us)
+    end = start + timedelta(microseconds=step_us * len(slots))
     earliest = utcnow() - timedelta(days=int(settings.five_minute_retention_days))
     grouped: dict[datetime, list] = {}
     if earliest < end:
@@ -1137,7 +1174,7 @@ def _coarse_resource_points(
               AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
         """
         for node_id, moment, cpu, ram, disk, count in db.execute_sql(sql, [max(start, earliest), end, *node_ids]).fetchall():
-            index = _slot_index(_parse_dt(moment), start, span_us)
+            index = _slot_index(_parse_dt(moment), start, step_us, len(slots))
             if index is None:
                 continue
             grouped.setdefault(slots[index], []).append((int(node_id), _parse_dt(moment), cpu, ram, disk, int(count or 0)))
@@ -1158,14 +1195,14 @@ def _coarse_resource_points(
             weight,
         )
     if single:
-        _overlay_raw_on_slots(points, node_ids[0], slots, start, end, span_us)
+        _overlay_raw_on_slots(points, node_ids[0], slots, start, end, step_us)
     if start < earliest:
-        _fill_old_resource_slots(points, node_ids, slots, start, earliest, span_us)
+        _fill_old_resource_slots(points, node_ids, slots, start, earliest, step_us)
     return points
 
 
 def _overlay_raw_on_slots(
-    points: dict[datetime, dict], node_id: int, slots: list[datetime], start: datetime, end: datetime, span_us: int
+    points: dict[datetime, dict], node_id: int, slots: list[datetime], start: datetime, end: datetime, step_us: int
 ) -> None:
     rows = db.execute_sql(
         """
@@ -1179,14 +1216,14 @@ def _overlay_raw_on_slots(
         (node_id, start, end),
     ).fetchall()
     for collected_at, cpu, ram, disk in rows:
-        index = _slot_index(_parse_dt(collected_at), start, span_us)
+        index = _slot_index(_parse_dt(collected_at), start, step_us, len(slots))
         if index is None:
             continue
         points[slots[index]] = _resource_point(cpu, ram, disk, 1)
 
 
 def _fill_old_resource_slots(
-    points: dict[datetime, dict], node_ids: list[int], slots: list[datetime], start: datetime, earliest: datetime, span_us: int
+    points: dict[datetime, dict], node_ids: list[int], slots: list[datetime], start: datetime, earliest: datetime, step_us: int
 ) -> None:
     if not node_ids:
         return
@@ -1206,7 +1243,7 @@ def _fill_old_resource_slots(
     """
     grouped: dict[datetime, list] = {}
     for moment, cpu, ram, disk, count in db.execute_sql(sql, [start, earliest, *node_ids]).fetchall():
-        index = _slot_index(_parse_dt(moment), start, span_us)
+        index = _slot_index(_parse_dt(moment), start, step_us, len(slots))
         if index is None or int(count or 0) <= 0:
             continue
         grouped.setdefault(slots[index], []).append((cpu or 0, ram or 0, disk or 0, int(count)))
@@ -1226,12 +1263,12 @@ def _fill_old_resource_slots(
 
 def resource_chart(filters: QueryFilters) -> dict:
     nodes, _traffic, _resources = matching_nodes(filters)
-    bucket, slots, start, span_us = _chart_slots(filters)
+    bucket, slots, start, step_us = _chart_slots(filters)
     node_ids = [node.id for node in nodes]
     if bucket == "5min":
         points = _five_resource_points(node_ids, slots)
     else:
-        points = _coarse_resource_points(node_ids, slots, start, filters.end, span_us)
+        points = _coarse_resource_points(node_ids, slots, start, step_us)
     packed = _series_from_points(slots, points, ["cpu_avg", "cpu_max", "cpu_min", "ram_percent", "disk_percent"])
     return {"range": range_meta(filters, bucket), "labels": packed["labels"], "datasets": _resource_datasets(packed["columns"])}
 
