@@ -518,7 +518,6 @@
     ]);
     const data = summary.data;
     const trafficBlock = data.traffic;
-    const resourcesBlock = data.resources;
     $("#cards").innerHTML = [
       card("Nodes", data.nodes.total, ""),
       card("Online", data.nodes.online, ""),
@@ -528,8 +527,6 @@
       card("Download", textOf(trafficBlock, "rx_text"), textOf(trafficBlock, "rx_bps_avg_text", "")),
       card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_avg_text", "")),
       card("Total usage", textOf(trafficBlock, "total_text"), ""),
-      card("Average CPU", resourcesBlock.cpu_avg == null ? "—" : `${resourcesBlock.cpu_avg.toFixed(1)}%`, resourcesBlock.cpu_max == null ? "" : `Max <bdi>${resourcesBlock.cpu_max.toFixed(1)}%</bdi>`),
-      card("Average RAM", resourcesBlock.ram_percent_avg == null ? "—" : `${resourcesBlock.ram_percent_avg.toFixed(1)}%`, resourcesBlock.ram_percent_max == null ? "" : `Max <bdi>${resourcesBlock.ram_percent_max.toFixed(1)}%</bdi>`),
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
     drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
