@@ -315,7 +315,7 @@ apt_install() {
 }
 
 ensure_python() {
-  apt_install ca-certificates curl git python3 python3-venv
+  apt_install ca-certificates curl git python3 python3-venv tar
   local py version probe
   if command -v python3 >/dev/null 2>&1; then
     py="$(command -v python3)"
@@ -772,16 +772,22 @@ install_panel() {
 
 update_panel() {
   require_ready
-  [ -d "${APP_DIR}/.git" ] || die "The install directory is not a git checkout."
+  [ -f "${APP_DIR}/main.py" ] || die "The panel files are missing."
   echo "Installing system packages."
   ensure_python
   ensure_user
   ensure_app_access
-  local saved
+  local saved stage
   saved="$(mktemp)"
+  stage="$(mktemp -d)"
   cp "${APP_DIR}/config.py" "$saved"
-  git_as_app -C "$APP_DIR" fetch --depth 1 origin main
-  run_as_app git -C "$APP_DIR" reset --hard origin/main
+  if ! fetch_source "$stage"; then
+    rm -rf "$stage"
+    rm -f "$saved"
+    die "Could not download the update from GitHub."
+  fi
+  cp -a "$stage"/. "$APP_DIR"/
+  rm -rf "$stage"
   preserve_config "$saved"
   rm -f "$saved"
   if [ ! -x "${APP_DIR}/.venv/bin/pip" ]; then
@@ -987,7 +993,7 @@ uninstall_panel() {
   fi
   if [ -d "$APP_DIR" ]; then
     [ -f "$STATE_FILE" ] || die "Refusing to remove ${APP_DIR}: install state is missing."
-    [ -d "${APP_DIR}/.git" ] || die "Refusing to remove ${APP_DIR}: it is not the panel checkout."
+    [ -f "${APP_DIR}/main.py" ] || die "Refusing to remove ${APP_DIR}: it is not the panel directory."
     rm -rf "$APP_DIR"
   fi
   if id "$APP_USER" >/dev/null 2>&1; then
@@ -1073,50 +1079,46 @@ proxy_url() {
   printf '%s' "${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}"
 }
 
-git_as_app() {
+curl_get() {
+  local url="$1"
+  local dest="$2"
   local proxy
   proxy="$(proxy_url)"
   if [ -n "$proxy" ]; then
-    run_as_app git -c "http.proxy=${proxy}" "$@"
-  else
-    run_as_app git "$@"
+    curl -fsSL --retry 3 --retry-delay 2 --proxy "$proxy" -o "$dest" "$url" && return 0
+    echo "Download through the proxy failed. Trying a direct connection."
   fi
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY \
+    curl -fsSL --retry 3 --retry-delay 2 --noproxy '*' -o "$dest" "$url"
 }
 
-clone_once() {
-  local proxy="$1"
-  local attempt
-  for attempt in 1 2 3; do
-    if [ -n "$proxy" ]; then
-      git -c "http.proxy=${proxy}" clone --depth 1 "$REPO" "$APP_DIR" && return 0
-    else
-      env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY \
-        git -c http.proxy= clone --depth 1 "$REPO" "$APP_DIR" && return 0
+fetch_source() {
+  local dest="$1"
+  local archive url
+  local urls=(
+    "https://codeload.github.com/MoonlessWanderer/TrafficPanel/tar.gz/refs/heads/main"
+    "https://github.com/MoonlessWanderer/TrafficPanel/archive/refs/heads/main.tar.gz"
+  )
+  mkdir -p "$dest"
+  for url in "${urls[@]}"; do
+    archive="$(mktemp)"
+    if curl_get "$url" "$archive" && tar -tzf "$archive" >/dev/null 2>&1; then
+      tar -xzf "$archive" -C "$dest" --strip-components=1
+      rm -f "$archive"
+      return 0
     fi
-    rm -rf "$APP_DIR"
-    if [ "$attempt" -lt 3 ]; then
-      echo "GitHub clone failed. Retrying (${attempt}/3)..."
-      sleep 3
-    fi
+    rm -f "$archive"
   done
   return 1
 }
 
 clone_repo() {
-  local proxy
-  proxy="$(proxy_url)"
-  if [ -n "$proxy" ] && clone_once "$proxy"; then
+  echo "Downloading the panel."
+  if fetch_source "$APP_DIR"; then
     return 0
   fi
-  if [ -n "$proxy" ]; then
-    echo "The proxy closed the connection to GitHub. Trying a direct connection."
-    if clone_once ""; then
-      return 0
-    fi
-  elif clone_once ""; then
-    return 0
-  fi
-  die "Could not clone the panel from GitHub. If a proxy is required, it must allow CONNECT to github.com port 443. Choose Install again after that works."
+  rm -rf "$APP_DIR"
+  die "Could not download the panel from GitHub. The proxy closed the connection. Choose Install again after GitHub is reachable."
 }
 
 menu_loop() {

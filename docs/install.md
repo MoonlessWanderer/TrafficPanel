@@ -25,7 +25,7 @@ Menu, in order:
 
 Domain and SSL installs Nginx, requests a certificate, and keeps the panel on localhost. Port 80 must reach the server, and the domain must point at it. Changing the port changes the public port. With SSL, the application itself stays on an internal port.
 
-`sudo` without `-E` drops `http_proxy` and `https_proxy`. The installer also reads those variables from `/etc/environment` and from `Acquire::http::Proxy` and `Acquire::https::Proxy` in apt configuration, then passes them to git and pip.
+`sudo` without `-E` drops `http_proxy` and `https_proxy`. The installer also reads those variables from `/etc/environment` and from `Acquire::http::Proxy` and `Acquire::https::Proxy` in apt configuration, then passes them to downloads and pip.
 
 Update and remove:
 
@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
 ```
 
-Update fetches the current `main` branch, installs Python dependencies again, and restarts the service. The saved `config.py` and the database stay in place. New settings added by the project keep their default until you change them.
+Update downloads the current `main` branch, installs Python dependencies again, and restarts the service. The saved `config.py` and the database stay in place. New settings added by the project keep their default until you change them.
 
 Uninstall asks you to type `DELETE`. It then stops the service, deletes the install directory (including the database and logs), removes the Nginx site, deletes the certificate issued for the configured domain, and removes the `trafficpanel` user. It does not uninstall Nginx, Certbot, or Python, because other sites may use them.
 
