@@ -10,14 +10,7 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
 ```
 
-The command opens a menu: install, update, start, stop, restart, logs, domain and SSL, port, status, and uninstall. Installation installs packages before it asks for an admin account. The panel listens on port 443.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
-```
-
-Update keeps `config.py` and the SQLite database. Uninstall removes the service, program files, database, proxy site, and the certificate issued for this panel.
+After this command, the menu is where you work: install, update, start, stop, restart, logs, domain and SSL, port, status, and uninstall. Installation installs packages before it asks for an admin account. The panel listens on port 443. Update keeps `config.py` and the database. Uninstall removes the service, program files, database, proxy site, and the certificate issued for this panel.
 
 ## Local run
 

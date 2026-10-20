@@ -8,7 +8,9 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash
 ```
 
-The command opens a menu. Installation installs packages first, then asks for the directory and the first admin account. Leaving the directory empty installs `traffic-panel` in the current directory, usually `/root/traffic-panel`. The panel listens on port 443 without asking for a domain. It is not installed under `/opt`. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it. If a parent directory such as `/root` blocks the service user, the installer adds execute permission for others on that parent so the service can enter the panel directory.
+Run that command again whenever you need the panel. The menu is where you install, update, start, stop, restart, read logs, set the domain and certificate, change the port, check status, or uninstall.
+
+Installation installs packages first, then asks for the directory and the first admin account. Leaving the directory empty installs `traffic-panel` in the current directory, usually `/root/traffic-panel`. The panel listens on port 443 without asking for a domain. It is not installed under `/opt`. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it. If a parent directory such as `/root` blocks the service user, the installer adds execute permission for others on that parent so the service can enter the panel directory.
 
 Menu, in order:
 
@@ -26,13 +28,6 @@ Menu, in order:
 Domain and SSL installs Nginx, requests a certificate, and keeps the panel on localhost. Port 80 must reach the server, and the domain must point at it. Changing the port changes the public port. With SSL, the application itself stays on an internal port.
 
 `sudo` without `-E` drops `http_proxy` and `https_proxy`. The installer also reads those variables from `/etc/environment` and from `Acquire::http::Proxy` and `Acquire::https::Proxy` in apt configuration, then passes them to downloads and pip.
-
-Update and remove:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- update
-curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo -E bash -s -- uninstall
-```
 
 Update downloads the current `main` branch, installs Python dependencies again, and restarts the service. The saved `config.py` and the database stay in place. New settings added by the project keep their default until you change them.
 
