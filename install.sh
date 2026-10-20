@@ -373,12 +373,16 @@ prepare_app_tree() {
 }
 
 install_python_packages() {
-  prepare_app_tree
-  if ! run_as_app test -x "${APP_DIR}/.venv/bin/python"; then
-    run_as_app "$PYTHON" -m venv "${APP_DIR}/.venv"
+  echo "Installing panel packages."
+  if [ ! -x "${APP_DIR}/.venv/bin/python" ]; then
+    "$PYTHON" -m venv "${APP_DIR}/.venv"
   fi
-  run_as_app "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
-  run_as_app "${APP_DIR}/.venv/bin/python" -m pip install -r "${APP_DIR}/requirements.txt"
+  "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
+  "${APP_DIR}/.venv/bin/python" -m pip install -r "${APP_DIR}/requirements.txt"
+  prepare_app_tree
+  if [ -d "${APP_DIR}/.venv/bin" ]; then
+    find "${APP_DIR}/.venv/bin" -type f -exec chmod u+x {} +
+  fi
 }
 
 write_config() {
