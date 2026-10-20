@@ -11,8 +11,9 @@ APP_DIR="/opt/traffic-panel"
 APP_USER="trafficpanel"
 APP_GROUP="trafficpanel"
 SERVICE="traffic-panel"
-STATE_DIR="/etc/traffic-panel"
-STATE_FILE="${STATE_DIR}/install.state"
+STATE_FILE="${APP_DIR}/data/install.state"
+UNIT_FILE="${APP_DIR}/traffic-panel.service"
+NGINX_FILE="${APP_DIR}/nginx.conf"
 PORT="8080"
 NGINX_SITE="traffic-panel"
 
@@ -97,22 +98,32 @@ valid_admin() {
   [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
 }
 
+installed() {
+  [ -f "$STATE_FILE" ] || [ -f /etc/traffic-panel/install.state ]
+}
+
 load_state() {
   DOMAIN=""
-  if [ -f "$STATE_FILE" ]; then
+  local path="$STATE_FILE"
+  if [ ! -f "$path" ] && [ -f /etc/traffic-panel/install.state ]; then
+    path="/etc/traffic-panel/install.state"
+  fi
+  if [ -f "$path" ]; then
     # shellcheck disable=SC1090
-    . "$STATE_FILE"
+    . "$path"
   fi
 }
 
 write_state() {
-  install -d -m 0755 "$STATE_DIR"
+  install -d -o "$APP_USER" -g "$APP_GROUP" -m 0750 "${APP_DIR}/data"
   cat >"$STATE_FILE" <<EOF
 DOMAIN=$(printf '%q' "$DOMAIN")
 EMAIL=$(printf '%q' "$EMAIL")
 SSL=$( [ -n "$DOMAIN" ] && printf yes || printf no )
 EOF
-  chmod 0644 "$STATE_FILE"
+  chown "$APP_USER:$APP_GROUP" "$STATE_FILE"
+  chmod 0640 "$STATE_FILE"
+  rm -rf /etc/traffic-panel
 }
 
 require_deb() {
@@ -258,7 +269,7 @@ PY
 }
 
 write_service() {
-  cat >"/etc/systemd/system/${SERVICE}.service" <<EOF
+  cat >"$UNIT_FILE" <<EOF
 [Unit]
 Description=Traffic Panel
 After=network-online.target
@@ -279,6 +290,9 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
+  chown "$APP_USER:$APP_GROUP" "$UNIT_FILE"
+  chmod 0644 "$UNIT_FILE"
+  ln -sfn "$UNIT_FILE" "/etc/systemd/system/${SERVICE}.service"
   systemctl daemon-reload
 }
 
@@ -290,10 +304,20 @@ nginx_path() {
   fi
 }
 
+link_nginx() {
+  local dest
+  dest="$(nginx_path)"
+  if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+    mv "$dest" "$NGINX_FILE"
+  fi
+  ln -sfn "$NGINX_FILE" "$dest"
+  if [ -d /etc/nginx/sites-available ]; then
+    ln -sfn "$NGINX_FILE" "/etc/nginx/sites-enabled/${NGINX_SITE}"
+  fi
+}
+
 write_nginx() {
-  local path
-  path="$(nginx_path)"
-  cat >"$path" <<EOF
+  cat >"$NGINX_FILE" <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -311,9 +335,9 @@ server {
     }
 }
 EOF
-  if [ -d /etc/nginx/sites-available ]; then
-    ln -sfn "$path" "/etc/nginx/sites-enabled/${NGINX_SITE}"
-  fi
+  chown "$APP_USER:$APP_GROUP" "$NGINX_FILE"
+  chmod 0644 "$NGINX_FILE"
+  link_nginx
   nginx -t
   systemctl enable nginx
   systemctl reload nginx
@@ -380,7 +404,7 @@ collect_install_answers() {
 }
 
 install_panel() {
-  if [ -f "$STATE_FILE" ]; then
+  if installed; then
     die "The panel is already installed. Update it with: install.sh update"
   fi
   if [ -e "$APP_DIR" ]; then
@@ -417,6 +441,9 @@ install_panel() {
     write_nginx
     echo "Requesting a certificate for ${DOMAIN}. Port 80 must reach this server and DNS must point here."
     if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect; then
+      link_nginx
+      nginx -t
+      systemctl reload nginx
       write_config "$secret" "" "" "127.0.0.1" "true" "$DOMAIN"
       systemctl restart "$SERVICE"
       wait_healthy "$DOMAIN" || die "The panel did not return after enabling secure cookies."
@@ -440,7 +467,7 @@ install_panel() {
 }
 
 update_panel() {
-  [ -f "$STATE_FILE" ] || die "The panel is not installed."
+  installed || die "The panel is not installed."
   [ -d "${APP_DIR}/.git" ] || die "The install directory is not a git checkout."
   ensure_python
   load_state
@@ -457,11 +484,12 @@ update_panel() {
   run_as_app "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
   systemctl restart "$SERVICE"
   wait_healthy "${DOMAIN:-127.0.0.1}" || die "The panel did not become healthy after the update."
+  write_state
   echo "Update complete."
 }
 
 uninstall_panel() {
-  [ -f "$STATE_FILE" ] || die "The panel is not installed."
+  installed || die "The panel is not installed."
   load_state
   if [ "$ASSUME_YES" -ne 1 ]; then
     [ -r /dev/tty ] || die "Pass --yes to remove the panel without a prompt."
@@ -483,7 +511,7 @@ uninstall_panel() {
     /opt/traffic-panel) rm -rf "$APP_DIR" ;;
     *) die "Refusing to remove unexpected directory: ${APP_DIR}" ;;
   esac
-  rm -rf "$STATE_DIR"
+  rm -rf /etc/traffic-panel
   if id "$APP_USER" >/dev/null 2>&1; then
     userdel "$APP_USER" || true
   fi

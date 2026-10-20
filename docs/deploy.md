@@ -2,7 +2,7 @@
 
 ## Service
 
-The supported install is `install.sh`. It creates the `traffic-panel` service, runs one worker, and keeps the SQLite database under `/opt/traffic-panel/data`.
+The supported install is `install.sh`. It keeps the program, database, configuration, service file, and Nginx site in `/opt/traffic-panel`, runs one worker, and links the service into systemd.
 
 ```bash
 sudo systemctl enable --now traffic-panel

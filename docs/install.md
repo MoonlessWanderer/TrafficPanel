@@ -8,7 +8,7 @@ On Debian or Ubuntu, as root:
 curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficPanel/main/install.sh | sudo bash
 ```
 
-The script installs Python 3.12, clones the panel to `/opt/traffic-panel`, and starts the `traffic-panel` service.
+The script installs Python 3.12, puts the whole panel in `/opt/traffic-panel`, and starts the `traffic-panel` service. Code, the virtual environment, `config.py`, the database, logs, the service file, and the Nginx site file all stay in that directory. Systemd and Nginx only receive a link, because those programs look in their own directories. A Let's Encrypt certificate stays in `/etc/letsencrypt`, where Certbot renews it.
 
 - Leave the domain empty to listen on port 8080 without TLS.
 - Enter a domain and an email to install Nginx and request a Let's Encrypt certificate. Port 80 must reach the server, and the domain must point at it.
