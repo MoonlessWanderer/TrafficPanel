@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p>Day-to-day values are stored here. Startup values live only in config.py.</p>
+  </div>
+</header>
+<div id="state" class="state">Loading…</div>
+<div id="startup" class="card startup-card" hidden></div>
+<form id="settings-form"></form>
+<section class="card">
+  <header><h2>Restart</h2></header>
+  <p class="muted">Restart to apply changes in config.py. Open connections drop for a moment.</p>
+  <button class="btn danger" id="restart-btn" type="button">Restart panel</button>
+</section>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div><h1 id="group-title">Group</h1><p id="group-sub"></p></div>
+  <div class="row-actions">
+    <button class="btn" id="add-member" type="button">Add node</button>
+    <button class="btn ghost" id="edit-group" type="button">Edit</button>
+    <button class="btn danger" id="delete-group" type="button">Delete group</button>
+  </div>
+</header>
+<div id="state" class="state">Loading…</div>
+<section id="group-cards" class="cards"></section>
+<section class="split">
+  <article class="card"><header><h2>Group traffic</h2></header><div class="chart-box"><canvas id="traffic-chart"></canvas></div></article>
+  <article class="card"><header><h2>Member share</h2></header><div class="chart-box"><canvas id="share-chart"></canvas></div></article>
+</section>
+<article class="card">
+  <header><h2>Member ranking</h2></header>
+  <div class="table-wrap"><table><thead><tr><th>Node</th><th>Status</th><th>Traffic</th><th>Share</th><th>CPU</th><th></th></tr></thead><tbody id="rank-rows"></tbody></table></div>
+</article>
+{% endblock %}

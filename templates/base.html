@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body data-page="{{ page }}" data-timezone="{{ timezone }}" data-node-id="{{ node_id | default('') }}" data-group-id="{{ group_id | default('') }}">
+  <a class="skip" href="#content">Skip to content</a>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <strong>VPS Monitor</strong>
+          <small>Traffic and resources</small>
+        </div>
+      </div>
+      <nav aria-label="Primary">
+        <a href="/" data-nav="dashboard">Dashboard</a>
+        <a href="/nodes" data-nav="nodes">Nodes</a>
+        <a href="/groups" data-nav="groups">Groups</a>
+        <a href="/compare" data-nav="compare">Compare</a>
+        <a href="/alerts" data-nav="alerts">Alerts</a>
+        <a href="/settings" data-nav="settings">Settings</a>
+      </nav>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="top-start">
+          <button class="icon-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false"><span class="burger" aria-hidden="true"></span></button>
+          <form id="time-form" class="time-form">
+            <label class="sr-only" for="range-preset">Time range</label>
+            <select id="range-preset" name="preset" aria-label="Time range">
+              <option value="1h">Last hour</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="month">This month</option>
+              <option value="custom">Custom range</option>
+            </select>
+            <label class="custom-only">From
+              <input name="from" type="datetime-local" aria-label="Range start">
+            </label>
+            <label class="custom-only">To
+              <input name="to" type="datetime-local" aria-label="Range end">
+            </label>
+            <button class="btn" type="submit">Apply</button>
+          </form>
+        </div>
+        <div class="top-actions">
+          <button class="icon-btn" id="theme-btn" type="button">Dark mode</button>
+          <span class="who">{{ username }}</span>
+          <button class="btn ghost" id="logout-btn" type="button">Sign out</button>
+        </div>
+      </header>
+      <main id="content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+  <div id="backdrop" class="backdrop" hidden></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="modal" class="modal" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+      <div class="dialog-actions">
+        <button class="btn ghost" id="modal-cancel" type="button">Cancel</button>
+        <button class="btn" id="modal-ok" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script src="/static/js/panel.js"></script>
+</body>
+</html>

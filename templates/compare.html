@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head"><div><h1>Compare</h1><p>Compare nodes or groups over one time range.</p></div></header>
+<form id="compare-form" class="filters">
+  <div class="filter-primary compare-primary">
+    <label>Type
+      <select name="kind"><option value="nodes">Nodes</option><option value="groups">Groups</option></select>
+    </label>
+    <label>Selection
+      <select id="compare-select" multiple size="6" aria-label="Items to compare"></select>
+    </label>
+    <button class="btn" type="submit">Compare</button>
+  </div>
+</form>
+<div id="state" class="state" hidden></div>
+<section class="split">
+  <article class="card"><header><h2>Chart</h2></header><div class="chart-box"><canvas id="compare-chart"></canvas></div></article>
+  <article class="card"><header><h2>Table</h2></header><div id="compare-table"></div></article>
+</section>
+{% endblock %}

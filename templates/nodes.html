@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Nodes</h1><p>Each server connects with its own id and key.</p></div>
+  <button class="btn" id="new-node" type="button">New node</button>
+</header>
+<form id="node-filters" class="filters">
+  <div class="filter-primary">
+    <label>Search<input name="q" placeholder="Name or node id"></label>
+    <label>Status
+      <select name="status">
+        <option value="">All</option>
+        <option value="online">Online</option>
+        <option value="offline">Offline</option>
+        <option value="disabled">Disabled</option>
+      </select>
+    </label>
+    <label>Group<select name="group_ids" id="group-filter"><option value="">All</option></select></label>
+    <label>Sort
+      <select name="sort">
+        <option value="name">Name</option>
+        <option value="-traffic">Highest usage</option>
+        <option value="traffic">Lowest usage</option>
+        <option value="status">Status</option>
+        <option value="-last_seen">Last activity</option>
+        <option value="-cpu">CPU</option>
+        <option value="-ram">RAM</option>
+      </select>
+    </label>
+    <button class="btn" type="submit">Apply filters</button>
+  </div>
+  <details class="filter-more" id="more-filters">
+    <summary>More filters</summary>
+    <div class="filter-grid">
+      <label>Traffic
+        <select name="traffic">
+          <option value="total">Total</option>
+          <option value="rx">RX</option>
+          <option value="tx">TX</option>
+        </select>
+      </label>
+      <label>Minimum traffic<input name="traffic_min" inputmode="numeric" placeholder="bytes"></label>
+      <label>Maximum traffic<input name="traffic_max" inputmode="numeric" placeholder="bytes"></label>
+      <label>Minimum CPU<input name="cpu_min" inputmode="decimal"></label>
+      <label>Maximum CPU<input name="cpu_max" inputmode="decimal"></label>
+      <label>Minimum RAM<input name="ram_min" inputmode="decimal"></label>
+      <label>Maximum RAM<input name="ram_max" inputmode="decimal"></label>
+      <label>Minimum disk<input name="disk_min" inputmode="decimal"></label>
+      <label>Maximum disk<input name="disk_max" inputmode="decimal"></label>
+    </div>
+  </details>
+</form>
+<div id="state" class="state">Loading…</div>
+<div class="table-wrap"><table><thead><tr><th>Name</th><th>Id</th><th>Status</th><th>Range traffic</th><th>CPU</th><th>RAM</th><th>Last report</th></tr></thead><tbody id="node-rows"></tbody></table></div>
+<nav id="pager" class="pager" aria-label="Pages"></nav>
+{% endblock %}

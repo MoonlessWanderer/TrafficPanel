@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Alerts</h1><p>Connection loss, high usage, and unusual traffic.</p></div>
+  <a class="btn ghost" id="export-link" href="/api/v1/export/traffic.csv">Export CSV</a>
+</header>
+<form id="alert-filters" class="filters">
+  <div class="filter-primary alert-primary">
+    <label>Status
+      <select name="alert_status"><option value="">All</option><option value="open">Open</option><option value="resolved">Closed</option></select>
+    </label>
+    <button class="btn" type="submit">Apply</button>
+  </div>
+</form>
+<div id="state" class="state">Loading…</div>
+<div class="table-wrap"><table><thead><tr><th>Time</th><th>Node</th><th>Type</th><th>Message</th><th>Status</th><th></th></tr></thead><tbody id="alert-rows"></tbody></table></div>
+{% endblock %}

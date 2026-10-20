@@ -1,0 +1,221 @@
+from __future__ import annotations
+
+import time
+from datetime import datetime, timedelta, timezone
+
+from app.models import Node, NodeCredential, TrafficHourlyAggregate, User
+from app.services.aggregates import refresh_hourly
+from app.utils.time import utcnow
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _headers(node_id: str, key: str, nonce: str) -> dict[str, str]:
+    return {
+        "X-Node-Id": node_id,
+        "X-Node-Key": key,
+        "X-Node-Timestamp": str(int(time.time())),
+        "X-Node-Nonce": nonce,
+    }
+
+
+def _payload(moment: datetime, nonce: str, rx: int, tx: int, cpu: float = 20) -> dict:
+    return {
+        "nonce": nonce,
+        "collected_at": _stamp(moment),
+        "cpu_percent": cpu,
+        "ram_total_bytes": 1_000_000,
+        "ram_used_bytes": 400_000,
+        "ram_free_bytes": 600_000,
+        "disk_total_bytes": 10_000_000,
+        "disk_used_bytes": 2_000_000,
+        "disk_free_bytes": 8_000_000,
+        "load_1": 0.2,
+        "load_5": 0.2,
+        "load_15": 0.1,
+        "uptime_seconds": 500,
+        "agent_version": "1.0.0",
+        "os_name": "Debian",
+        "kernel_version": "6.8.0",
+        "interfaces": [
+            {
+                "name": "eth0",
+                "rx_bytes": rx,
+                "tx_bytes": tx,
+                "rx_packets": 10,
+                "tx_packets": 8,
+                "rx_errors": 0,
+                "tx_errors": 0,
+                "rx_dropped": 0,
+                "tx_dropped": 0,
+            }
+        ],
+    }
+
+
+def _ingest(client, node_id: str, key: str, moment: datetime, rx: int, tx: int, nonce: str, cpu: float = 20):
+    return client.post(
+        "/api/v1/ingest/metrics",
+        json=_payload(moment, nonce, rx, tx, cpu),
+        headers=_headers(node_id, key, nonce),
+    )
+
+
+def _create_node(client, name: str) -> dict:
+    response = client.post("/api/v1/nodes", json={"name": name, "tags": ["edge"]})
+    assert response.status_code == 201, response.text
+    return response.json()["data"]
+
+
+def test_login_and_key_are_not_stored_raw(client):
+    assert client.get("/login").status_code == 200
+    assert client.get("/", follow_redirects=False).status_code == 302
+    assert client.get("/api/v1/auth/me").status_code == 401
+    bad = client.post("/api/v1/auth/login", json={"username": "admin", "password": "wrong-password"})
+    assert bad.status_code == 401
+    good = client.post("/api/v1/auth/login", json={"username": "admin", "password": "S3cure-Test-Pass"})
+    assert good.status_code == 200
+    client.headers["X-CSRF-Token"] = good.json()["data"]["csrf_token"]
+    created = _create_node(client, "web")
+    stored = NodeCredential.get()
+    assert created["node_key"] not in stored.key_hash
+    assert created["node_key"] not in stored.key_prefix
+    assert User.get().password_hash != "S3cure-Test-Pass"
+
+
+def test_duplicate_reset_gap_and_status(client, admin):
+    created = _create_node(client, "edge")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    now = datetime.now(timezone.utc)
+    first = _ingest(client, node_id, key, now - timedelta(seconds=30), 1_000, 2_000, "nonce-normal-0001")
+    second = _ingest(client, node_id, key, now, 2_500, 2_400, "nonce-normal-0002")
+    duplicate = _ingest(client, node_id, key, now, 2_500, 2_400, "nonce-normal-0002")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"]["duplicate"] is True
+
+    summary = client.get("/api/v1/dashboard/summary?preset=1h")
+    traffic = summary.json()["data"]["traffic"]
+    assert traffic["rx_bytes"] == 1_500
+    assert traffic["tx_bytes"] == 400
+    assert abs(traffic["rx_bps_avg"] - 50) < 0.1
+
+    reset_node = _create_node(client, "reset")
+    moment = datetime.now(timezone.utc)
+    assert _ingest(client, reset_node["node_id"], reset_node["node_key"], moment - timedelta(seconds=30), 10_000, 8_000, "nonce-reset-00001").status_code == 200
+    assert _ingest(client, reset_node["node_id"], reset_node["node_key"], moment, 400, 8_100, "nonce-reset-00002").status_code == 200
+    stats = client.get(f"/api/v1/nodes/{reset_node['node_id']}/stats?preset=1h").json()["data"]
+    assert stats["interfaces"][0]["reason"] == "reset"
+    assert stats["traffic"]["rx_bytes"] == 400
+    assert stats["traffic"]["rx_bytes"] >= 0
+
+    gap_node = _create_node(client, "gap")
+    later = datetime.now(timezone.utc)
+    assert _ingest(client, gap_node["node_id"], gap_node["node_key"], later - timedelta(minutes=50), 100, 100, "nonce-gap-0000001").status_code == 200
+    assert _ingest(client, gap_node["node_id"], gap_node["node_key"], later, 50_000, 50_000, "nonce-gap-0000002").status_code == 200
+    gap_stats = client.get(f"/api/v1/nodes/{gap_node['node_id']}/stats?preset=24h").json()["data"]
+    assert gap_stats["traffic"]["has_data"] is False
+    assert gap_stats["traffic"]["rx_bytes"] is None
+
+    online = client.get(f"/api/v1/nodes/{node_id}").json()["data"]
+    assert online["status"] == "online"
+    node = Node.get(Node.node_id == node_id)
+    node.last_seen_at = utcnow() - timedelta(seconds=500)
+    node.save()
+    offline = client.get(f"/api/v1/nodes/{node_id}").json()["data"]
+    assert offline["status"] == "offline"
+
+    revoked = client.post(f"/api/v1/nodes/{node_id}/revoke-key")
+    assert revoked.status_code == 200
+    rejected = _ingest(client, node_id, key, datetime.now(timezone.utc), 10, 10, "nonce-revoked-0001")
+    assert rejected.status_code == 401
+    rotated = client.post(f"/api/v1/nodes/{node_id}/rotate-key")
+    assert rotated.status_code == 200
+    new_key = rotated.json()["data"]["node_key"]
+    assert _ingest(client, node_id, key, datetime.now(timezone.utc), 11, 11, "nonce-oldkey-00001").status_code == 401
+    assert _ingest(client, node_id, new_key, datetime.now(timezone.utc), 12, 12, "nonce-newkey-00001").status_code == 200
+
+
+def test_group_stats_follow_membership(client, admin):
+    alpha = _create_node(client, "alpha")
+    beta = _create_node(client, "beta")
+    group = client.post("/api/v1/groups", json={"name": "لبه", "color": "#0f6e6b", "tags": ["اصلی"]})
+    assert group.status_code == 201
+    group_id = group.json()["data"]["id"]
+    added = client.post(f"/api/v1/groups/{group_id}/members", json={"node_ids": [alpha["node_id"], beta["node_id"]]})
+    assert added.status_code == 200
+    now = datetime.now(timezone.utc)
+    _ingest(client, alpha["node_id"], alpha["node_key"], now - timedelta(seconds=30), 0, 0, "nonce-alpha-00001", cpu=80)
+    _ingest(client, alpha["node_id"], alpha["node_key"], now, 1_000, 0, "nonce-alpha-00002", cpu=80)
+    _ingest(client, beta["node_id"], beta["node_key"], now - timedelta(seconds=30), 0, 0, "nonce-beta-000001", cpu=10)
+    _ingest(client, beta["node_id"], beta["node_key"], now, 3_000, 0, "nonce-beta-000002", cpu=10)
+    before = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
+    assert before["traffic"]["rx_bytes"] == 4_000
+    assert before["counts"]["online"] == 2
+    client.delete(f"/api/v1/groups/{group_id}/members/{beta['node_id']}")
+    after = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
+    assert after["traffic"]["rx_bytes"] == 1_000
+    assert len(after["ranking"]) == 1
+
+
+def test_combined_filters_and_aggregate(client, admin):
+    alpha = _create_node(client, "alpha-node")
+    beta = _create_node(client, "beta-node")
+    group = client.post("/api/v1/groups", json={"name": "فیلتر", "color": "#1d4e89"}).json()["data"]
+    client.post(f"/api/v1/groups/{group['id']}/members", json={"node_ids": [alpha["node_id"]]})
+    now = datetime.now(timezone.utc)
+    _ingest(client, alpha["node_id"], alpha["node_key"], now - timedelta(seconds=30), 0, 0, "nonce-filter-a001", cpu=85)
+    _ingest(client, alpha["node_id"], alpha["node_key"], now, 5_000, 0, "nonce-filter-a002", cpu=85)
+    _ingest(client, beta["node_id"], beta["node_key"], now - timedelta(seconds=30), 0, 0, "nonce-filter-b001", cpu=5)
+    _ingest(client, beta["node_id"], beta["node_key"], now, 100, 0, "nonce-filter-b002", cpu=5)
+    quiet = _create_node(client, "quiet")
+    _ingest(client, quiet["node_id"], quiet["node_key"], now, 10, 10, "nonce-quiet-000001", cpu=1)
+    response = client.get(
+        "/api/v1/nodes",
+        params={
+            "preset": "1h",
+            "q": "alpha",
+            "status": "online",
+            "group_ids": group["id"],
+            "cpu_min": 50,
+            "traffic_min": 1000,
+            "traffic": "rx",
+            "sort": "-traffic",
+        },
+    )
+    assert response.status_code == 200, response.text
+    items = response.json()["data"]
+    assert [item["node_id"] for item in items] == [alpha["node_id"]]
+    missing = client.get("/api/v1/nodes", params={"preset": "1h", "traffic_min": 0, "q": "quiet"})
+    assert missing.json()["data"] == []
+    refresh_hourly(now - timedelta(hours=1), now + timedelta(minutes=1))
+    row = TrafficHourlyAggregate.get(
+        (TrafficHourlyAggregate.node == Node.get(Node.node_id == alpha["node_id"]))
+        & (TrafficHourlyAggregate.interface_name == "*")
+        & (TrafficHourlyAggregate.sample_count > 0)
+    )
+    assert row.rx_bytes == 5_000
+    assert row.cpu_avg == 85
+
+
+def test_restart_keeps_data(client, admin, tmp_path, monkeypatch):
+    created = _create_node(client, "persistent")
+    from app.db.database import db
+
+    if not db.is_closed():
+        db.close()
+    from app.factory import create_app
+    from fastapi.testclient import TestClient
+
+    application = create_app(enable_scheduler=False)
+    with TestClient(application) as again:
+        assert User.select().count() == 1
+        login = again.post("/api/v1/auth/login", json={"username": "admin", "password": "S3cure-Test-Pass"})
+        again.headers["X-CSRF-Token"] = login.json()["data"]["csrf_token"]
+        listed = again.get("/api/v1/nodes")
+        assert listed.json()["data"][0]["node_id"] == created["node_id"]
+        assert again.get("/health").json()["ok"] is True

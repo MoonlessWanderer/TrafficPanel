@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div><h1 id="node-title">Node</h1><p id="node-sub"></p></div>
+  <div class="row-actions">
+    <button class="btn" id="rotate-key" type="button">Rotate key</button>
+    <button class="btn ghost" id="toggle-node" type="button">Disable</button>
+    <button class="btn danger" id="revoke-key" type="button">Revoke key</button>
+    <button class="btn danger" id="delete-node" type="button">Delete</button>
+  </div>
+</header>
+<div id="state" class="state">Loading…</div>
+<section id="node-cards" class="cards"></section>
+<section class="split">
+  <article class="card"><header><h2>Traffic</h2><div class="seg" id="traffic-view"><button type="button" data-view="volume" class="on">Volume</button><button type="button" data-view="speed">Speed</button></div></header><div class="chart-box"><canvas id="traffic-chart"></canvas></div></article>
+  <article class="card"><header><h2>Resources</h2></header><div class="chart-box"><canvas id="resource-chart"></canvas></div></article>
+</section>
+<article class="card"><header><h2>Network interfaces</h2></header><div class="table-wrap"><table><thead><tr><th>Interface</th><th>RX</th><th>TX</th><th>RX speed</th><th>TX speed</th><th>Errors</th></tr></thead><tbody id="iface-rows"></tbody></table></div></article>
+<article class="card"><header><h2>Samples</h2></header><div class="table-wrap"><table><thead><tr><th>Time</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Load</th><th>Uptime</th></tr></thead><tbody id="sample-rows"></tbody></table></div></article>
+{% endblock %}

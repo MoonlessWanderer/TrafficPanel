@@ -1,0 +1,16 @@
+[Unit]
+Description=VPS Monitor Panel
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vps-monitor-panel
+ExecStart=/usr/bin/python3.12 main.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+User=vpsmonitor
+Group=vpsmonitor
+
+[Install]
+WantedBy=multi-user.target
