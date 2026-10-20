@@ -17,6 +17,7 @@ from app.models import (
 )
 from app.schemas.ingest import HeartbeatIn, MetricsIn
 from app.services.alerts import evaluate_sample, evaluate_traffic_spike, recover
+from app.services.nics import is_virtual_interface
 from app.services.present import percent
 from app.services.traffic import CounterPoint, compute_traffic_delta
 from app.utils.time import as_utc, isoformat, utcnow
@@ -67,12 +68,15 @@ def ingest_metrics(node: Node, payload: MetricsIn, header_nonce: str) -> dict:
     collected, now = _checked_time(payload.collected_at)
     if NodeMetricSample.select().where((NodeMetricSample.node == node) & (NodeMetricSample.collected_at == collected)).exists():
         return {"duplicate": True, "collected_at": isoformat(collected)}
-    interfaces = [item for item in payload.interfaces if item.name != "lo"]
+    interfaces = [item for item in payload.interfaces if not is_virtual_interface(item.name)]
     if not interfaces:
         raise AppError("no_interface", "No network interface other than loopback was sent.", 422)
     names = [item.name for item in interfaces]
     if len(names) != len(set(names)):
         raise AppError("duplicate_interface", "A network interface name was repeated.", 422)
+    marked = [item for item in interfaces if item.primary]
+    counted_names = {item.name for item in (marked or interfaces)}
+    interfaces = [item for item in interfaces if item.name in counted_names]
     try:
         with db.atomic():
             _remember_nonce(node, payload.nonce, now)
@@ -153,6 +157,8 @@ def ingest_metrics(node: Node, payload: MetricsIn, header_nonce: str) -> dict:
                     valid=delta.valid,
                     reason=delta.reason,
                 )
+                if item.name not in counted_names:
+                    continue
                 if delta.valid and delta.rx_bytes is not None and delta.tx_bytes is not None:
                     saw_valid = True
                     saw_reset = saw_reset or delta.reset_detected

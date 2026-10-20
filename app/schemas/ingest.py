@@ -17,6 +17,7 @@ class InterfaceIn(BaseModel):
     tx_errors: int | None = Field(default=None, ge=0)
     rx_dropped: int | None = Field(default=None, ge=0)
     tx_dropped: int | None = Field(default=None, ge=0)
+    primary: bool = False
 
     @field_validator("name")
     @classmethod

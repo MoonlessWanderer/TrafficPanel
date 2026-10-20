@@ -155,7 +155,9 @@ def choose_bucket(filters: QueryFilters) -> str:
     if filters.bucket != "auto":
         return filters.bucket
     span = (filters.end - filters.start).total_seconds()
-    if span <= settings.chart_raw_max_hours * 3600:
+    # A day stays on the same samples as the last hour. Hourly buckets hide a short history.
+    raw_hours = max(settings.chart_raw_max_hours, 48)
+    if span <= raw_hours * 3600:
         return "raw"
     if span <= settings.chart_hourly_max_days * 86400:
         return "hour"

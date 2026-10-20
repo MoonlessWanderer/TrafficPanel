@@ -5,7 +5,7 @@ Traffic is the difference of cumulative operating-system counters, not a precomp
 - Interval RX is the current RX counter minus the previous RX counter, when the counter did not move backward.
 - Interval TX uses the same rule.
 - Speed is that difference divided by the real seconds between the two samples.
-- A node total is the sum of interfaces other than `lo` in the same interval.
+- A node total is the main interface only. That is the default-route interface, and virtual interfaces such as docker, veth, and bridges are left out.
 - Average speed across nodes is the mean of each node's average speed. It is not the grand total divided by the sample count again.
 
 If the gap between two samples is longer than the allowed sample gap in panel settings, that interval is a gap. No zero-traffic row is stored for it, and it is left out of totals.
@@ -23,4 +23,4 @@ A sample with the same collection time is not calculated again.
 
 ## Difference from a host bill
 
-Operating-system counters are not the same as a provider invoice. The host may meter traffic in the hypervisor, before it reaches this interface, or with rules that exclude internal traffic. This panel does not estimate sample gaps or counter resets beyond the rules above. A sum of several interfaces can include internal paths. The panel shows usage observed on the operating system itself.
+Operating-system counters are not the same as a provider invoice. The host may meter traffic in the hypervisor, before it reaches this interface, or with rules that exclude internal traffic. This panel does not estimate sample gaps or counter resets beyond the rules above. The panel shows usage on the server's main interface, not on virtual interfaces.

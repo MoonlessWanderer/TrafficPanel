@@ -24,6 +24,7 @@ from app.models import (
     TrafficInterval,
 )
 from app.services.filters import QueryFilters, choose_bucket
+from app.services.nics import counted_interface, counted_sql, is_virtual_interface
 from app.services.present import group_payload, node_payload, node_status, percent, status_cutoff
 from app.utils.jsonbox import load_json
 from app.utils.time import hour_bucket, isoformat, local_day_start
@@ -127,7 +128,7 @@ def per_node_traffic(node_ids: list[int], start: datetime, end: datetime) -> dic
                COALESCE(SUM(rx_bytes), 0), COALESCE(SUM(tx_bytes), 0),
                COALESCE(SUM(duration_seconds), 0), MAX(rx_bps), MAX(tx_bps), COUNT(*)
         FROM traffic_interval
-        WHERE interface_name = '*' AND valid = 1
+        WHERE {counted_sql()} AND valid = 1
           AND period_end > ? AND period_end <= ?
           AND node_id IN ({ph})
         GROUP BY node_id, bucket
@@ -137,7 +138,7 @@ def per_node_traffic(node_ids: list[int], start: datetime, end: datetime) -> dic
                COALESCE(rx_bytes, 0), COALESCE(tx_bytes, 0),
                COALESCE(duration_seconds, 0), rx_bps_max, tx_bps_max, sample_count
         FROM traffic_hourly_aggregate
-        WHERE interface_name = '*' AND sample_count > 0
+        WHERE {counted_sql()} AND sample_count > 0
           AND bucket_start >= ? AND bucket_start < ?
           AND node_id IN ({ph})
     """
@@ -715,7 +716,7 @@ def _hourly_points(node_ids: list[int], filters: QueryFilters) -> dict[datetime,
         SELECT strftime('%Y-%m-%d %H:00:00', period_end) AS bucket,
                SUM(rx_bytes), SUM(tx_bytes), SUM(duration_seconds), MAX(rx_bps), MAX(tx_bps), COUNT(*)
         FROM traffic_interval
-        WHERE interface_name = '*' AND valid = 1
+        WHERE {counted_sql()} AND valid = 1
           AND period_end > ? AND period_end <= ? AND node_id IN ({ph})
         GROUP BY bucket
     """
@@ -737,7 +738,7 @@ def _hourly_points(node_ids: list[int], filters: QueryFilters) -> dict[datetime,
         SELECT bucket_start, SUM(rx_bytes), SUM(tx_bytes), SUM(duration_seconds),
                MAX(rx_bps_max), MAX(tx_bps_max), SUM(sample_count)
         FROM traffic_hourly_aggregate
-        WHERE interface_name = '*' AND sample_count > 0
+        WHERE {counted_sql()} AND sample_count > 0
           AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
         GROUP BY bucket_start
     """
@@ -767,7 +768,7 @@ def _raw_points(node_ids: list[int], filters: QueryFilters) -> tuple[list[str], 
         TrafficInterval.select()
         .where(
             (TrafficInterval.node.in_(node_ids))
-            & (TrafficInterval.interface_name == "*")
+            & counted_interface(TrafficInterval.interface_name)
             & (TrafficInterval.period_end > filters.start)
             & (TrafficInterval.period_end <= filters.end)
         )
@@ -906,8 +907,6 @@ def _group_traffic_chart(filters: QueryFilters, nodes: list[Node], bucket: str) 
 
 def resource_chart(filters: QueryFilters) -> dict:
     bucket = choose_bucket(filters)
-    if bucket == "raw":
-        bucket = "hour" if (filters.end - filters.start).total_seconds() > 6 * 3600 else "raw"
     nodes, _traffic, _resources = matching_nodes(filters)
     ids = [node.id for node in nodes]
     if bucket == "raw":
@@ -1053,7 +1052,7 @@ def _latest_interfaces(node: Node) -> list[dict]:
     items = []
     for row in rows:
         name = row.interface.name
-        if name in seen:
+        if name in seen or is_virtual_interface(name):
             continue
         seen.add(name)
         interval = (

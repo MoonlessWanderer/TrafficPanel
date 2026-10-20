@@ -203,6 +203,81 @@ def test_combined_filters_and_aggregate(client, admin):
     assert row.cpu_avg == 85
 
 
+def test_virtual_interfaces_are_left_out_of_traffic(client, admin):
+    created = _create_node(client, "uplink")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    now = datetime.now(timezone.utc)
+
+    def send(moment, eth_rx, eth_tx, docker_rx, docker_tx, nonce):
+        payload = _payload(moment, nonce, eth_rx, eth_tx)
+        payload["interfaces"] = [
+            {**payload["interfaces"][0], "name": "eth0", "primary": True},
+            {
+                "name": "eth1",
+                "rx_bytes": docker_rx,
+                "tx_bytes": docker_tx,
+                "rx_packets": 1,
+                "tx_packets": 1,
+                "rx_errors": 0,
+                "tx_errors": 0,
+                "rx_dropped": 0,
+                "tx_dropped": 0,
+                "primary": False,
+            },
+            {
+                "name": "docker0",
+                "rx_bytes": docker_rx,
+                "tx_bytes": docker_tx,
+                "rx_packets": 1,
+                "tx_packets": 1,
+                "rx_errors": 0,
+                "tx_errors": 0,
+                "rx_dropped": 0,
+                "tx_dropped": 0,
+                "primary": False,
+            },
+        ]
+        return client.post("/api/v1/ingest/metrics", json=payload, headers=_headers(node_id, key, nonce))
+
+    assert send(now - timedelta(seconds=30), 1_000, 1_000, 50_000, 50_000, "nonce-uplink-00001").status_code == 200
+    assert send(now, 1_500, 1_300, 90_000, 80_000, "nonce-uplink-00002").status_code == 200
+    stats = client.get(f"/api/v1/nodes/{node_id}/stats?preset=1h").json()["data"]
+    assert stats["traffic"]["rx_bytes"] == 500
+    assert stats["traffic"]["tx_bytes"] == 300
+    assert [item["name"] for item in stats["interfaces"]] == ["eth0"]
+
+
+def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
+    from app.utils.time import as_utc, utcnow
+    import app.services.ingest as ingest
+
+    monkeypatch.setattr(ingest, "_checked_time", lambda collected_at: (as_utc(collected_at), utcnow()))
+    created = _create_node(client, "history")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    for hour in range(5):
+        start = now - timedelta(hours=5 - hour, seconds=40)
+        nonce_a = f"nonce-hist-a-{hour:04d}"
+        nonce_b = f"nonce-hist-b-{hour:04d}"
+        assert _ingest(client, node_id, key, start, 1_000_000 + hour * 10_000, 500_000, nonce_a).status_code == 200
+        assert _ingest(client, node_id, key, start + timedelta(seconds=30), 1_000_000 + hour * 10_000 + 2_000, 500_000 + 800, nonce_b).status_code == 200
+    chart = client.get("/api/v1/charts/traffic?preset=24h&node_ids=" + node_id)
+    assert chart.status_code == 200, chart.text
+    body = chart.json()["data"]
+    rx = [value for value in body["datasets"][0]["data"] if value]
+    assert body["range"]["bucket"] == "raw"
+    assert len(rx) >= 4
+    resources = client.get("/api/v1/charts/resources?preset=24h&node_ids=" + node_id)
+    cpu = [value for value in resources.json()["data"]["datasets"][0]["data"] if value is not None]
+    assert len(cpu) >= 4
+    week = client.get("/api/v1/charts/traffic?preset=7d&node_ids=" + node_id)
+    assert week.json()["data"]["range"]["bucket"] == "hour"
+    week_rx = [value for value in week.json()["data"]["datasets"][0]["data"] if value]
+    assert len(week_rx) >= 4
+
+
 def test_restart_keeps_data(client, admin, tmp_path, monkeypatch):
     created = _create_node(client, "persistent")
     from app.db.database import db

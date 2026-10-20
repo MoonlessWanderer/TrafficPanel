@@ -53,7 +53,7 @@ FIELDS: tuple[SettingField, ...] = (
     SettingField("hourly_retention_days", "Hourly retention", "Days.", "int", 180, "retention", 1, 3650),
     SettingField("daily_retention_days", "Daily retention", "Days.", "int", 730, "retention", 1, 3650),
     SettingField("nonce_retention_hours", "Nonce retention", "Hours.", "int", 48, "retention", 1, 720),
-    SettingField("chart_raw_max_hours", "Raw chart window", "Shorter ranges use raw samples. Hours.", "int", 6, "charts", 1, 168),
+    SettingField("chart_raw_max_hours", "Raw chart window", "Ranges up to this many hours draw every report. At least 48 hours stay this detailed.", "int", 48, "charts", 1, 168),
     SettingField("chart_hourly_max_days", "Hourly chart window", "Longer ranges use daily buckets. Days.", "int", 45, "charts", 1, 365),
     SettingField("aggregate_lookback_hours", "Rollup lookback", "Recent hours that are aggregated again.", "int", 48, "charts", 1, 168),
     SettingField("task_interval_seconds", "Task interval", "Seconds. Applies on the next scheduler loop.", "int", 30, "charts", 10, 3600),
