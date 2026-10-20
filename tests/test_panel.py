@@ -442,7 +442,7 @@ def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admi
     assert len(six.json()["data"]["labels"]) == 30
     assert set(_label_gaps(six.json()["data"]["labels"])) == {720}
     missing = client.get("/api/v1/charts/traffic")
-    assert missing.json()["data"]["range"]["preset"] == "1h"
+    assert missing.json()["data"]["range"]["preset"] == "24h"
 
 
 def test_restart_keeps_data(client, admin, tmp_path, monkeypatch):
