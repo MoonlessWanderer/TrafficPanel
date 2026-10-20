@@ -17,7 +17,7 @@ In `config.py`, set `ENV` to `production` and `COOKIE_SECURE` to `True`. Either:
 - terminate TLS at a reverse proxy and keep the panel on `127.0.0.1`, or
 - set `SSL_CERTFILE` and `SSL_KEYFILE` so Uvicorn serves TLS itself.
 
-The agent must use the panel HTTPS address.
+A node reports to the panel HTTPS address.
 
 ## Restart
 

@@ -1,6 +1,6 @@
 # VPS monitoring panel
 
-A standalone panel for traffic and resource metrics from virtual servers. Each VPS connects with its own node id and key. The agent only sends data outward.
+A standalone panel for traffic and resource metrics from virtual servers. Each server is registered as a node with its own id and key. The node program is a separate project.
 
 ## Server
 
@@ -43,4 +43,4 @@ The panel listens on `http://127.0.0.1:8080` by default. Paths in `config.py` ar
 
 `config.py` holds only startup assignments: environment, address, database path, secret, first admin, TLS, and logging. There is no `.env` file. Thresholds, retention, and timezone live in SQLite and are edited from the Settings page. After you change `config.py`, restart the panel from that page.
 
-Install, agent, backup, and deploy notes are in `docs/`.
+Install, backup, and deploy notes are in `docs/`.

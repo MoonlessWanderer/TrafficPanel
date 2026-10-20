@@ -36,7 +36,7 @@ GROUPS = (
 )
 
 FIELDS: tuple[SettingField, ...] = (
-    SettingField("report_interval_seconds", "Report interval", "Match the agent push interval to this value. Seconds.", "int", 30, "connection", 5, 3600),
+    SettingField("report_interval_seconds", "Report interval", "How often a node is expected to report. Seconds.", "int", 30, "connection", 5, 3600),
     SettingField("stale_after_seconds", "Stale after", "An online node is marked delayed after this many seconds.", "int", 90, "connection", 10, 86400),
     SettingField("offline_after_seconds", "Offline after", "A node is offline when no valid report arrives in this time.", "int", 90, "connection", 10, 86400),
     SettingField("max_clock_skew_seconds", "Clock skew", "Samples and requests outside this skew are rejected. Seconds.", "int", 120, "connection", 10, 3600),

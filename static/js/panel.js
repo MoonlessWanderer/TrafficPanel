@@ -495,7 +495,7 @@
     ]);
     const info = node.data;
     $("#node-title").textContent = info.name;
-    $("#node-sub").textContent = `${info.node_id} · Agent ${info.agent_version || "—"} · ${info.os_name || ""}`;
+    $("#node-sub").textContent = `${info.node_id} · Version ${info.agent_version || "—"} · ${info.os_name || ""}`;
     const block = stats.data.traffic;
     const res = stats.data.resources;
     $("#node-cards").innerHTML = [

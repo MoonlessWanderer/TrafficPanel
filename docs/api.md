@@ -47,7 +47,7 @@ Shared query filters: `preset`, `from`, `to`, `node_ids`, `group_ids`, `q`, `sta
 
 `POST /system/restart` needs an admin session and CSRF. It writes an audit row, then replaces the process after a short delay.
 
-## Agent
+## Node reports
 
 Headers:
 
