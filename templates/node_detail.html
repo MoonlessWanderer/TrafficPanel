@@ -10,6 +10,14 @@
   </div>
 </header>
 <div id="state" class="state">Loading…</div>
+<article class="card" id="install-card">
+  <header>
+    <h2>Install on the server</h2>
+    <button class="btn" id="copy-install" type="button" hidden>Copy command</button>
+  </header>
+  <p class="muted" id="install-note"></p>
+  <pre class="install-command" id="install-command"></pre>
+</article>
 <section id="node-cards" class="cards"></section>
 <section class="split">
   <article class="card"><header><h2>Traffic</h2><div class="seg" id="traffic-view"><button type="button" data-view="volume" class="on">Volume</button><button type="button" data-view="speed">Speed</button></div></header><div class="chart-box"><canvas id="traffic-chart"></canvas></div></article>

@@ -47,6 +47,7 @@
     const modal = $("#modal");
     $("#modal-title").textContent = title;
     $("#modal-body").textContent = message;
+    $("#modal .dialog").classList.remove("wide");
     $("#modal-ok").textContent = okLabel;
     $("#modal-ok").classList.toggle("danger", danger);
     $("#modal-cancel").textContent = "Cancel";
@@ -77,6 +78,7 @@
     const modal = $("#modal");
     $("#modal-title").textContent = title;
     $("#modal-body").replaceChildren(form);
+    $("#modal .dialog").classList.remove("wide");
     $("#modal-ok").textContent = "Save";
     $("#modal-ok").classList.remove("danger");
     $("#modal-cancel").textContent = "Cancel";
@@ -100,26 +102,98 @@
     });
   }
 
-  function showKey(title, key, notice) {
+  function shellQuote(value) {
+    return `'${String(value).replace(/'/g, `'\\''`)}'`;
+  }
+
+  function rememberNodeKey(nodeId, key) {
+    sessionStorage.setItem(`vps-node-key:${nodeId}`, key);
+  }
+
+  function rememberedNodeKey(nodeId) {
+    return sessionStorage.getItem(`vps-node-key:${nodeId}`) || "";
+  }
+
+  function forgetNodeKey(nodeId) {
+    sessionStorage.removeItem(`vps-node-key:${nodeId}`);
+  }
+
+  let reportEvery = null;
+  async function reportInterval() {
+    if (reportEvery != null) return reportEvery;
+    try {
+      const result = await api("/api/v1/settings");
+      const field = result.data.groups.flatMap((group) => group.fields).find((item) => item.key === "report_interval_seconds");
+      reportEvery = Number(field?.value) || 30;
+    } catch {
+      reportEvery = 30;
+    }
+    return reportEvery;
+  }
+
+  function installCommand(nodeId, key, interval) {
+    return `curl -fsSL https://raw.githubusercontent.com/MoonlessWanderer/TrafficNode/main/install.sh | sudo -E bash -s -- install --url ${shellQuote(location.origin)} --id ${shellQuote(nodeId)} --key ${shellQuote(key)} --interval ${shellQuote(interval)}`;
+  }
+
+  async function copyText(value, success) {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast(success);
+    } catch {
+      toast("Automatic copy failed. Copy it manually.");
+    }
+  }
+
+  function showInstall(nodeId, keyActive) {
+    const card = $("#install-card");
+    if (!card) return;
+    const note = $("#install-note");
+    const command = $("#install-command");
+    const button = $("#copy-install");
+    const key = keyActive ? rememberedNodeKey(nodeId) : "";
+    if (!key) {
+      if (!keyActive) forgetNodeKey(nodeId);
+      note.textContent = keyActive
+        ? "Rotate the key to get a command that installs this node and connects it to the panel."
+        : "The key is revoked. Rotate the key to get an install command.";
+      command.textContent = "";
+      button.hidden = true;
+      return;
+    }
+    note.textContent = "Run this command on the server. It installs the node and connects it to this panel.";
+    button.hidden = false;
+    const write = (interval) => {
+      const text = installCommand(nodeId, key, interval);
+      command.textContent = text;
+      button.onclick = () => copyText(text, "Command copied.");
+    };
+    write(reportEvery || 30);
+    reportInterval().then(write);
+  }
+
+  function showKey(title, key, notice, nodeId) {
+    rememberNodeKey(nodeId, key);
     const modal = $("#modal");
+    $("#modal .dialog").classList.add("wide");
     $("#modal-title").textContent = title;
-    $("#modal-body").innerHTML = `<p>${notice}</p><div class="key-box" id="key-value"></div>`;
+    $("#modal-body").innerHTML = `<p>${escapeHtml(notice)}</p><div class="key-box" id="key-value"></div><p class="muted">Run this command on the server. It installs the node and connects it to this panel.</p><pre class="install-command" id="modal-command"></pre>`;
     $("#key-value").textContent = key;
-    $("#modal-ok").textContent = "Copy key";
+    $("#modal-ok").textContent = "Copy command";
     $("#modal-ok").classList.remove("danger");
     $("#modal-cancel").textContent = "Close";
     modal.hidden = false;
-    $("#modal-ok").onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(key);
-        toast("Key copied.");
-      } catch {
-        toast("Automatic copy failed. Copy the key manually.");
-      }
+    const write = (interval) => {
+      const text = installCommand(nodeId, key, interval);
+      const box = $("#modal-command");
+      if (box) box.textContent = text;
+      $("#modal-ok").onclick = () => copyText(text, "Command copied.");
     };
+    write(reportEvery || 30);
+    reportInterval().then(write);
     $("#modal-cancel").onclick = () => {
       modal.hidden = true;
     };
+    showInstall(nodeId, true);
   }
 
   function formatWhen(value) {
@@ -352,7 +426,7 @@
   }
 
   function feedItem(text, when) {
-    return `<div class="feed-item"><span>${text}</span><time>${formatWhen(when)}</time></div>`;
+    return `<div class="feed-item"><span>${escapeHtml(text)}</span><time>${formatWhen(when)}</time></div>`;
   }
 
   function textOf(block, field, fallback = "—") {
@@ -386,10 +460,10 @@
     drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
     drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
     $("#top-nodes").innerHTML = data.top_nodes.length
-      ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td><a href="/nodes/${item.node_id}">${item.name}</a></td><td>${statusPill(item.status)}</td><td class="num">${item.total_text?.text || "—"}</td></tr>`).join("")}</tbody></table></div>`
+      ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="empty">No data has been recorded for this range.</p>`;
     $("#top-groups").innerHTML = data.top_groups.length
-      ? `<div class="table-wrap"><table><tbody>${data.top_groups.map((item) => `<tr><td><a href="/groups/${item.id}">${item.name}</a></td><td class="num">${item.total_text?.text || "—"}</td></tr>`).join("")}</tbody></table></div>`
+      ? `<div class="table-wrap"><table><tbody>${data.top_groups.map((item) => `<tr><td><a href="/groups/${encodeURIComponent(item.id)}">${escapeHtml(item.name)}</a></td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="empty">No data has been recorded for this range.</p>`;
     $("#dash-alerts").innerHTML = data.alerts.length
       ? data.alerts.map((item) => feedItem(item.message, item.opened_at)).join("")
@@ -448,7 +522,7 @@
             method: "POST",
             body: JSON.stringify({ name: values.name, description: values.description }),
           });
-          showKey("Node added.", result.data.node_key, result.data.key_notice);
+          showKey("Node added.", result.data.node_key, result.data.key_notice, result.data.node_id);
           renderNodes();
         } catch (error) {
           toast(error.message);
@@ -470,7 +544,7 @@
       setState("");
       rows.innerHTML = result.data.map((node) => `
         <tr>
-          <td><a href="/nodes/${node.node_id}?${queryString()}">${node.name}</a></td>
+          <td><a href="/nodes/${encodeURIComponent(node.node_id)}?${queryString()}">${escapeHtml(node.name)}</a></td>
           <td class="ltr">${node.node_id}</td>
           <td>${statusPill(node.status, node.stale)}</td>
           <td class="num">${node.range_traffic?.total_text?.text || "—"}</td>
@@ -495,17 +569,19 @@
     ]);
     const info = node.data;
     $("#node-title").textContent = info.name;
-    $("#node-sub").textContent = `${info.node_id} · Version ${info.agent_version || "—"} · ${info.os_name || ""}`;
+    const subtitle = [info.node_id, `Version ${info.agent_version || "—"}`];
+    if (info.os_name) subtitle.push(info.os_name);
+    $("#node-sub").textContent = subtitle.join(" · ");
     const block = stats.data.traffic;
     const res = stats.data.resources;
     $("#node-cards").innerHTML = [
       card("Status", statusPill(info.status, info.stale), info.last_seen_at ? formatWhen(info.last_seen_at) : "No report has been received yet."),
       card("Key", info.key_active ? `<span class="token">${info.key_prefix}</span>` : "Revoked", info.key_active ? "Key prefix" : ""),
-      card("RX", textOf(block, "rx_text"), textOf(block, "rx_bps_avg_text")),
-      card("TX", textOf(block, "tx_text"), textOf(block, "tx_bps_avg_text")),
+      card("RX", textOf(block, "rx_text"), textOf(block, "rx_bps_avg_text", "")),
+      card("TX", textOf(block, "tx_text"), textOf(block, "tx_bps_avg_text", "")),
       card("CPU", res.cpu_avg == null ? "—" : `${res.cpu_avg.toFixed(1)}%`, res.cpu_max == null ? "" : `Max <bdi>${res.cpu_max.toFixed(1)}%</bdi>`),
       card("RAM", res.ram_percent_avg == null ? "—" : `${res.ram_percent_avg.toFixed(1)}%`, info.ram.used_text?.text || ""),
-      card("Disk", info.disk.percent == null ? "—" : `${info.disk.percent.toFixed(1)}%`, `<bdi>${info.disk.used_text?.text || "—"}</bdi> of <bdi>${info.disk.total_text?.text || "—"}</bdi>`),
+      card("Disk", info.disk.percent == null ? "—" : `${info.disk.percent.toFixed(1)}%`, info.disk.total_text?.text ? `<bdi>${escapeHtml(info.disk.used_text?.text || "—")}</bdi> of <bdi>${escapeHtml(info.disk.total_text.text)}</bdi>` : ""),
       card("Uptime", info.uptime_seconds == null ? "—" : `<bdi>${Math.floor(info.uptime_seconds / 3600)}</bdi> h`, ""),
     ].join("");
     let view = "volume";
@@ -520,12 +596,13 @@
     };
     drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
     $("#iface-rows").innerHTML = stats.data.interfaces.length
-      ? stats.data.interfaces.map((item) => `<tr><td class="ltr">${item.name}</td><td class="num">${item.rx_text?.text || "—"}</td><td class="num">${item.tx_text?.text || "—"}</td><td class="num">${item.rx_bps_text?.text || "—"}</td><td class="num">${item.tx_bps_text?.text || "—"}</td><td class="num">${item.rx_errors ?? "—"} / ${item.tx_errors ?? "—"}</td></tr>`).join("")
+      ? stats.data.interfaces.map((item) => `<tr><td class="ltr">${escapeHtml(item.name)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.rx_bps_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_bps_text?.text || "—")}</td><td class="num">${item.rx_errors ?? "—"} / ${item.tx_errors ?? "—"}</td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     $("#sample-rows").innerHTML = samples.data.length
-      ? samples.data.map((item) => `<tr><td>${formatWhen(item.collected_at)}</td><td class="num">${item.cpu_percent.toFixed(1)}%</td><td class="num">${item.ram_percent ?? "—"}%</td><td class="num">${item.disk_percent ?? "—"}%</td><td class="num ltr">${item.load_1.toFixed(2)}</td><td class="num">${Math.floor(item.uptime_seconds / 3600)}h</td></tr>`).join("")
+      ? samples.data.map((item) => `<tr><td>${formatWhen(item.collected_at)}</td><td class="num">${item.cpu_percent.toFixed(1)}%</td><td class="num">${item.ram_percent == null ? "—" : item.ram_percent.toFixed(1) + "%"}</td><td class="num">${item.disk_percent == null ? "—" : item.disk_percent.toFixed(1) + "%"}</td><td class="num ltr">${item.load_1.toFixed(2)}</td><td class="num">${Math.floor(item.uptime_seconds / 3600)}h</td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     setState("");
+    showInstall(info.node_id, info.key_active);
     $("#toggle-node").textContent = info.is_enabled ? "Disable" : "Enable";
     $("#toggle-node").onclick = async () => {
       const path = info.is_enabled ? "disable" : "enable";
@@ -536,11 +613,12 @@
     $("#rotate-key").onclick = async () => {
       if (!await confirmBox("Rotate key", "The current key will be revoked. The new key is shown only once.", "Rotate", true)) return;
       const result = await api(`/api/v1/nodes/${nodeId}/rotate-key`, { method: "POST" });
-      showKey("The new key is ready.", result.data.node_key, result.data.key_notice);
+      showKey("The new key is ready.", result.data.node_key, result.data.key_notice, info.node_id);
     };
     $("#revoke-key").onclick = async () => {
       if (!await confirmBox("Revoke key", "Revoke this node key?", "Revoke", true)) return;
       await api(`/api/v1/nodes/${nodeId}/revoke-key`, { method: "POST" });
+      forgetNodeKey(nodeId);
       toast("Node key revoked.");
       load();
     };
@@ -555,7 +633,7 @@
     setState("Loading…");
     const result = await api("/api/v1/groups");
     $("#group-rows").innerHTML = result.data.length
-      ? result.data.map((group) => `<tr><td><a href="/groups/${group.id}?${queryString()}"><span class="pill" style="border-inline-start:4px solid ${group.color}">${group.name}</span></a></td><td>${group.members}</td><td>${group.online}</td><td>${group.offline}</td><td>${group.disabled}</td></tr>`).join("")
+      ? result.data.map((group) => `<tr><td><a href="/groups/${encodeURIComponent(group.id)}?${queryString()}"><span class="pill" style="border-inline-start:4px solid ${group.color}">${escapeHtml(group.name)}</span></a></td><td>${group.members}</td><td>${group.online}</td><td>${group.offline}</td><td>${group.disabled}</td></tr>`).join("")
       : "";
     setState(result.data.length ? "" : "No groups have been created yet.");
     $("#new-group").onclick = async () => {
@@ -602,7 +680,7 @@
     drawChart("traffic-chart", traffic.data.labels, traffic.data.datasets, "bytes");
     drawBar("share-chart", data.ranking.map((item) => item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
-      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${item.node_id}">${item.name}</a></td><td>${statusPill(item.status)}</td><td class="num">${item.total_text?.text || "—"}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${item.node_id}">Remove</button></td></tr>`).join("")
+      ? data.ranking.map((item) => `<tr><td><a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a></td><td>${statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     $("#rank-rows").onclick = async (event) => {
       const button = event.target.closest("[data-remove]");
@@ -689,8 +767,8 @@
         const result = await api(`${path}?${next.toString()}`);
         drawChart("compare-chart", result.data.chart.labels, result.data.chart.datasets, "bytes");
         const rows = result.data.items.map((item) => {
-          if (item.node) return `<tr><td>${item.node.name}</td><td class="num">${item.traffic.total_text?.text || "—"}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
-          return `<tr><td>${item.group.name}</td><td class="num">${item.traffic.total_text?.text || "—"}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
+          if (item.node) return `<tr><td>${escapeHtml(item.node.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
+          return `<tr><td>${escapeHtml(item.group.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
         }).join("");
         $("#compare-table").innerHTML = `<table><thead><tr><th>Name</th><th>Traffic</th><th>CPU</th></tr></thead><tbody>${rows}</tbody></table>`;
         setState(result.data.items.some((item) => item.traffic.has_data) ? "" : "No data has been recorded for this range.");
@@ -717,7 +795,7 @@
     setState("Loading…");
     const result = await api(`/api/v1/alerts?${queryString()}`);
     $("#alert-rows").innerHTML = result.data.length
-      ? result.data.map((item) => `<tr><td>${formatWhen(item.opened_at)}</td><td>${item.node_name || "—"}</td><td>${alertLabels[item.type] || item.type}</td><td>${item.message}</td><td><span class="pill ${item.status}">${item.status === "open" ? "Open" : "Closed"}</span></td><td>${item.status === "open" ? `<button class="btn ghost" type="button" data-resolve="${item.id}">Close</button>` : (item.resolution || "")}</td></tr>`).join("")
+      ? result.data.map((item) => `<tr><td>${formatWhen(item.opened_at)}</td><td>${escapeHtml(item.node_name || "—")}</td><td>${escapeHtml(alertLabels[item.type] || item.type)}</td><td>${escapeHtml(item.message)}</td><td><span class="pill ${item.status === "open" ? "open" : "resolved"}">${item.status === "open" ? "Open" : "Closed"}</span></td><td>${item.status === "open" ? `<button class="btn ghost" type="button" data-resolve="${escapeHtml(item.id)}">Close</button>` : escapeHtml(item.resolution || "")}</td></tr>`).join("")
       : "";
     setState(result.data.length ? "" : "No alerts in this view.");
     $("#alert-rows").onclick = async (event) => {

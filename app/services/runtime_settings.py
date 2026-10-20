@@ -38,7 +38,7 @@ GROUPS = (
 FIELDS: tuple[SettingField, ...] = (
     SettingField("report_interval_seconds", "Report interval", "How often a node is expected to report. Seconds.", "int", 30, "connection", 5, 3600),
     SettingField("stale_after_seconds", "Stale after", "An online node is marked delayed after this many seconds.", "int", 90, "connection", 10, 86400),
-    SettingField("offline_after_seconds", "Offline after", "A node is offline when no valid report arrives in this time.", "int", 90, "connection", 10, 86400),
+    SettingField("offline_after_seconds", "Offline after", "A node is offline when no valid report arrives in this time. Keep this longer than Stale after.", "int", 180, "connection", 10, 86400),
     SettingField("max_clock_skew_seconds", "Clock skew", "Samples and requests outside this skew are rejected. Seconds.", "int", 120, "connection", 10, 3600),
     SettingField("max_sample_gap_seconds", "Max sample gap", "A longer gap is not stored as zero traffic. Seconds.", "int", 600, "connection", 5, 86400),
     SettingField("max_plausible_bps", "Max plausible speed", "Faster intervals are invalid. Bytes per second.", "float", 12_500_000_000, "connection", 1_000_000, 1_000_000_000_000),
@@ -132,6 +132,8 @@ def _check_relations(values: dict[str, Any]) -> None:
         raise AppError("validation_error", "Stale threshold cannot be shorter than the report interval.", 422)
     if values["offline_after_seconds"] < report:
         raise AppError("validation_error", "Offline threshold cannot be shorter than the report interval.", 422)
+    if values["offline_after_seconds"] <= values["stale_after_seconds"]:
+        raise AppError("validation_error", "Offline threshold must be longer than the stale threshold.", 422)
     if values["max_sample_gap_seconds"] < report:
         raise AppError("validation_error", "Sample gap cannot be shorter than the report interval.", 422)
     if values["page_size_default"] > values["page_size_max"]:

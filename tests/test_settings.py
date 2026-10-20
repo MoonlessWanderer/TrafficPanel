@@ -19,6 +19,10 @@ def test_panel_settings_persist_and_reject_invalid_relation(admin, client):
     assert rejected.status_code == 422
     assert settings.stale_after_seconds == 90
 
+    equal = client.put("/api/v1/settings", json={"values": {"offline_after_seconds": 90, "stale_after_seconds": 90}})
+    assert equal.status_code == 422
+    assert settings.offline_after_seconds == 180
+
     saved = client.put("/api/v1/settings", json={"values": {"offline_after_seconds": 120, "timezone": "Asia/Tehran"}})
     assert saved.status_code == 200, saved.text
     reset_cache()
