@@ -890,10 +890,10 @@ def _five_resource_points(node_ids: list[int], slots: list[datetime]) -> dict[da
 
 def _traffic_datasets(columns: dict[str, list]) -> list[dict]:
     return [
-        {"key": "rx", "label": "RX", "unit": "bytes", "data": columns["rx"]},
-        {"key": "tx", "label": "TX", "unit": "bytes", "data": columns["tx"]},
-        {"key": "rx_bps", "label": "RX speed", "unit": "bps", "data": columns["rx_bps"]},
-        {"key": "tx_bps", "label": "TX speed", "unit": "bps", "data": columns["tx_bps"]},
+        {"key": "rx", "label": "Download", "unit": "bytes", "data": columns["rx"]},
+        {"key": "tx", "label": "Upload", "unit": "bytes", "data": columns["tx"]},
+        {"key": "rx_bps", "label": "Download speed", "unit": "bps", "data": columns["rx_bps"]},
+        {"key": "tx_bps", "label": "Upload speed", "unit": "bps", "data": columns["tx_bps"]},
     ]
 
 
