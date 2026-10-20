@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from app.core.settings import settings
-from app.db.database import DatabaseError, connect_db
-from app.db.migrations import run_migrations
+from app.db.database import DatabaseError, connect_db, db
 from app.logging_setup import configure_logging, get_logger
+from app.models.entities import ALL_MODELS
 from app.services.auth_service import ensure_admin
 from app.services.runtime_settings import ensure_runtime_settings
 
@@ -17,7 +17,7 @@ def bootstrap() -> None:
     configure_logging()
     try:
         connect_db(settings.database_path)
-        run_migrations()
+        db.create_tables(ALL_MODELS, safe=True)
         ensure_runtime_settings()
         ensure_admin()
     except DatabaseError:

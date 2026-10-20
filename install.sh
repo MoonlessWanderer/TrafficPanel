@@ -99,18 +99,14 @@ valid_admin() {
 }
 
 installed() {
-  [ -f "$STATE_FILE" ] || [ -f /etc/traffic-panel/install.state ]
+  [ -f "$STATE_FILE" ]
 }
 
 load_state() {
   DOMAIN=""
-  local path="$STATE_FILE"
-  if [ ! -f "$path" ] && [ -f /etc/traffic-panel/install.state ]; then
-    path="/etc/traffic-panel/install.state"
-  fi
-  if [ -f "$path" ]; then
+  if [ -f "$STATE_FILE" ]; then
     # shellcheck disable=SC1090
-    . "$path"
+    . "$STATE_FILE"
   fi
 }
 
@@ -123,7 +119,6 @@ SSL=$( [ -n "$DOMAIN" ] && printf yes || printf no )
 EOF
   chown "$APP_USER:$APP_GROUP" "$STATE_FILE"
   chmod 0640 "$STATE_FILE"
-  rm -rf /etc/traffic-panel
 }
 
 require_deb() {
@@ -519,7 +514,6 @@ uninstall_panel() {
     /opt/traffic-panel) rm -rf "$APP_DIR" ;;
     *) die "Refusing to remove unexpected directory: ${APP_DIR}" ;;
   esac
-  rm -rf /etc/traffic-panel
   if id "$APP_USER" >/dev/null 2>&1; then
     userdel "$APP_USER" || true
   fi

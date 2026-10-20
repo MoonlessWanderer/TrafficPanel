@@ -22,14 +22,6 @@ class BaseModel(Model):
         database = db
 
 
-class SchemaVersion(BaseModel):
-    version = IntegerField(unique=True)
-    applied_at = DateTimeField()
-
-    class Meta:
-        table_name = "schema_version"
-
-
 class User(BaseModel):
     username = CharField(max_length=64, unique=True)
     password_hash = CharField(max_length=255)
@@ -322,7 +314,6 @@ class RequestNonce(BaseModel):
 
 
 ALL_MODELS = [
-    SchemaVersion,
     User,
     Session,
     Node,

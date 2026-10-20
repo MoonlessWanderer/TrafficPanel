@@ -21,4 +21,4 @@ Keep `data/.secret_key` and `SECRET_KEY` in `config.py` private and separate fro
 3. Put the backup file in place as `data/panel.db`.
 4. Start the panel again.
 
-Running migrations again does not recreate existing tables and does not wipe previous data.
+Starting the panel again creates any missing tables and does not wipe existing rows.
