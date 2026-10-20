@@ -349,7 +349,7 @@ ensure_app_access() {
   dir="$(dirname "$APP_DIR")"
   while [ "$dir" != "/" ]; do
     if ! runuser -u "$APP_USER" -- test -x "$dir"; then
-      chmod o+x "$dir"
+      chmod o+x "$dir" || return 1
     fi
     dir="$(dirname "$dir")"
   done
@@ -367,22 +367,29 @@ run_as_app() {
 }
 
 prepare_app_tree() {
-  chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
-  chmod 0750 "$APP_DIR"
+  chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" || return 1
+  chmod 0750 "$APP_DIR" || return 1
   ensure_app_access
 }
 
 install_python_packages() {
+  local requirements="${1:-${APP_DIR}/requirements.txt}"
+  local status=0
   echo "Installing panel packages."
-  if [ ! -x "${APP_DIR}/.venv/bin/python" ]; then
-    "$PYTHON" -m venv "${APP_DIR}/.venv"
+  prepare_app_tree || return 1
+  if [ ! -x "${APP_DIR}/.venv/bin/python" ] || ! "${APP_DIR}/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    "$PYTHON" -m venv "${APP_DIR}/.venv" || return 1
   fi
-  "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
-  "${APP_DIR}/.venv/bin/python" -m pip install -r "${APP_DIR}/requirements.txt"
-  prepare_app_tree
+  if ! "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip; then
+    status=1
+  elif ! "${APP_DIR}/.venv/bin/python" -m pip install -r "$requirements"; then
+    status=1
+  fi
+  prepare_app_tree || return 1
   if [ -d "${APP_DIR}/.venv/bin" ]; then
-    find "${APP_DIR}/.venv/bin" -type f -exec chmod u+x {} +
+    find "${APP_DIR}/.venv/bin" -type f -exec chmod u+x {} + || return 1
   fi
+  return "$status"
 }
 
 write_config() {
@@ -444,7 +451,7 @@ PY
 
 preserve_config() {
   local saved="$1"
-  SAVED_CONFIG="$saved" APP_CONFIG="${APP_DIR}/config.py" "$PYTHON" - <<'PY'
+  SAVED_CONFIG="$saved" APP_CONFIG="${APP_DIR}/config.py" "$PYTHON" - <<'PY' || return 1
 import ast
 import os
 from pathlib import Path
@@ -480,7 +487,7 @@ names.extend(name for name in merged if name not in names)
 template_path.write_text("\n".join(line(name, merged[name]) for name in names) + "\n", encoding="utf-8")
 os.chmod(template_path, 0o640)
 PY
-  chown "$APP_USER:$APP_GROUP" "${APP_DIR}/config.py"
+  chown "$APP_USER:$APP_GROUP" "${APP_DIR}/config.py" || return 1
 }
 
 write_service() {
@@ -785,6 +792,13 @@ install_panel() {
   fi
 }
 
+restore_saved_config() {
+  local saved="$1"
+  cp "$saved" "${APP_DIR}/config.py" || return 1
+  chown "$APP_USER:$APP_GROUP" "${APP_DIR}/config.py" || return 1
+  chmod 0640 "${APP_DIR}/config.py" || return 1
+}
+
 update_panel() {
   require_ready
   [ -f "${APP_DIR}/main.py" ] || die "The panel files are missing."
@@ -801,13 +815,32 @@ update_panel() {
     rm -f "$saved"
     die "Could not download the update from GitHub."
   fi
-  cp -a "$stage"/. "$APP_DIR"/
+  if ! install_python_packages "${stage}/requirements.txt"; then
+    rm -rf "$stage"
+    rm -f "$saved"
+    die "Could not install the Python packages. The panel was not restarted."
+  fi
+  if ! cp -a "$stage"/. "$APP_DIR"/; then
+    restore_saved_config "$saved" || true
+    prepare_app_tree || true
+    rm -rf "$stage"
+    rm -f "$saved"
+    die "Could not copy the update. The previous configuration was restored."
+  fi
   rm -rf "$stage"
-  preserve_config "$saved"
+  if ! preserve_config "$saved"; then
+    restore_saved_config "$saved" || true
+    rm -f "$saved"
+    die "Could not keep the current configuration. The previous configuration was restored."
+  fi
   rm -f "$saved"
-  install_python_packages
+  if ! prepare_app_tree; then
+    die "Could not set ownership of the panel files."
+  fi
   write_service
-  systemctl restart "$SERVICE"
+  echo "Restarting the panel."
+  systemctl reset-failed "$SERVICE" || true
+  systemctl restart "$SERVICE" || die "The update is in place, but the panel did not start."
   if [ "$SSL" = "yes" ]; then
     write_nginx_ssl
   fi
@@ -1115,9 +1148,10 @@ fetch_source() {
   for url in "${urls[@]}"; do
     archive="$(mktemp)"
     if curl_get "$url" "$archive" && tar -tzf "$archive" >/dev/null 2>&1; then
-      tar -xzf "$archive" -C "$dest" --strip-components=1
-      rm -f "$archive"
-      return 0
+      if tar -xzf "$archive" -C "$dest" --strip-components=1; then
+        rm -f "$archive"
+        return 0
+      fi
     fi
     rm -f "$archive"
   done
