@@ -285,7 +285,7 @@ def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
     assert len(week_rx) >= 4
 
 
-def test_five_minute_chart_keeps_one_bucket_and_averages_cpu(client, admin):
+def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admin):
     created = _create_node(client, "bucket")
     node_id = created["node_id"]
     key = created["node_key"]
@@ -305,7 +305,8 @@ def test_five_minute_chart_keeps_one_bucket_and_averages_cpu(client, admin):
     assert [value for value in body["datasets"][1]["data"] if value] == [250]
     resources = client.get(f"/api/v1/charts/resources?preset=1h&node_ids={node_id}").json()["data"]
     cpu = [value for value in resources["datasets"][0]["data"] if value is not None]
-    assert cpu == [20]
+    assert resources["datasets"][0]["label"] == "CPU"
+    assert cpu == [30]
     six = client.get("/api/v1/charts/traffic?preset=6h")
     assert six.status_code == 200
     assert len(six.json()["data"]["labels"]) == 72

@@ -511,10 +511,9 @@
   async function loadDashboard() {
     setState("Loading…");
     const query = queryString();
-    const [summary, traffic, resources] = await Promise.all([
+    const [summary, traffic] = await Promise.all([
       api(`/api/v1/dashboard/summary?${query}`),
       api(`/api/v1/charts/traffic?${query}`),
-      api(`/api/v1/charts/resources?${query}`),
     ]);
     const data = summary.data;
     const trafficBlock = data.traffic;
@@ -529,7 +528,6 @@
       card("Total usage", textOf(trafficBlock, "total_text"), ""),
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
-    drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
     $("#top-nodes").innerHTML = data.top_nodes.length
       ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="empty">No data has been recorded for this range.</p>`;
@@ -660,14 +658,13 @@
     });
     if (removed) $("#node-sub").textContent = "This node was removed. Its traffic and resource history is kept.";
     const block = stats.data.traffic;
-    const res = stats.data.resources;
     $("#node-cards").innerHTML = [
       card("Status", statusPill(info.status, info.stale), info.last_seen_at ? formatWhen(info.last_seen_at) : "No report has been received yet."),
       card("Key", info.key_active ? `<span class="token">${info.key_prefix}</span>` : "Revoked", info.key_active ? "Key prefix" : ""),
       card("Download", textOf(block, "rx_text"), textOf(block, "rx_bps_avg_text", "")),
       card("Upload", textOf(block, "tx_text"), textOf(block, "tx_bps_avg_text", "")),
-      card("CPU", res.cpu_avg == null ? "—" : `${res.cpu_avg.toFixed(1)}%`, res.cpu_max == null ? "" : `Max <bdi>${res.cpu_max.toFixed(1)}%</bdi>`),
-      card("RAM", res.ram_percent_avg == null ? "—" : `${res.ram_percent_avg.toFixed(1)}%`, info.ram.used_text?.text || ""),
+      card("CPU", info.cpu_percent == null ? "—" : `${info.cpu_percent.toFixed(1)}%`, ""),
+      card("RAM", info.ram.percent == null ? "—" : `${info.ram.percent.toFixed(1)}%`, info.ram.used_text?.text || ""),
       card("Disk", info.disk.percent == null ? "—" : `${info.disk.percent.toFixed(1)}%`, info.disk.total_text?.text ? `<bdi>${escapeHtml(info.disk.used_text?.text || "—")}</bdi> of <bdi>${escapeHtml(info.disk.total_text.text)}</bdi>` : ""),
       card("Uptime", info.uptime_seconds == null ? "—" : `<bdi>${Math.floor(info.uptime_seconds / 3600)}</bdi> h`, ""),
     ].join("");
@@ -760,20 +757,16 @@
     $("#group-title").textContent = data.group.name;
     $("#group-sub").textContent = data.group.description || "Stats are calculated from the current members.";
     const trafficBlock = data.traffic;
-    const resources = data.resources;
     $("#group-cards").innerHTML = [
       card("Online", data.counts.online, `of ${data.counts.total}`),
       card("Offline", data.counts.offline, ""),
       card("Download", textOf(trafficBlock, "rx_text"), textOf(trafficBlock, "rx_bps_avg_text", "")),
       card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_avg_text", "")),
-      card("CPU", resources.cpu_avg == null ? "—" : `${resources.cpu_avg.toFixed(1)}%`, resources.cpu_max == null ? "" : `Max ${resources.cpu_max.toFixed(1)}%`),
-      card("RAM", resources.ram_percent_avg == null ? "—" : `${resources.ram_percent_avg.toFixed(1)}%`, ""),
-      card("Disk capacity", data.disk.total_text?.text || "—", data.disk.used_text ? `Used ${data.disk.used_text.text}` : ""),
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
     drawBar("share-chart", data.ranking.map((item) => item.status === "removed" ? "Removed node" : item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
-      ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_avg == null ? "—" : item.cpu_avg.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
+      ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
     $("#rank-rows").onclick = async (event) => {
       const button = event.target.closest("[data-remove]");
@@ -872,14 +865,17 @@
         const path = form.kind.value === "nodes" ? "/api/v1/compare/nodes" : "/api/v1/compare/groups";
         const result = await api(`${path}?${next.toString()}`);
         drawChart("compare-chart", result.data.chart.labels, result.data.chart.datasets, "bytes");
+        const comparingNodes = result.data.items.some((item) => item.node);
         const rows = result.data.items.map((item) => {
           if (item.node) {
             const name = item.node.status === "removed" ? "Removed node" : item.node.name;
-            return `<tr><td>${escapeHtml(name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
+            const cpu = item.node.cpu_percent == null ? "—" : `${item.node.cpu_percent.toFixed(1)}%`;
+            return `<tr><td>${escapeHtml(name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${cpu}</td></tr>`;
           }
-          return `<tr><td>${escapeHtml(item.group.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td><td class="num">${item.resources.cpu_avg == null ? "—" : item.resources.cpu_avg.toFixed(1) + "%"}</td></tr>`;
+          return `<tr><td>${escapeHtml(item.group.name)}</td><td class="num">${escapeHtml(item.traffic.total_text?.text || "—")}</td></tr>`;
         }).join("");
-        $("#compare-table").innerHTML = `<table><thead><tr><th>Name</th><th>Traffic</th><th>CPU</th></tr></thead><tbody>${rows}</tbody></table>`;
+        const head = comparingNodes ? "<th>Name</th><th>Traffic</th><th>CPU</th>" : "<th>Name</th><th>Traffic</th>";
+        $("#compare-table").innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
         setState(result.data.items.some((item) => item.traffic.has_data) ? "" : "No data has been recorded for this range.");
       } catch (error) {
         setState(error.message, true);

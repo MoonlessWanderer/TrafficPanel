@@ -327,22 +327,19 @@ def _within(value, low, high) -> bool:
     return True
 
 
-def _matches(traffic: dict | None, resource: dict | None, filters: QueryFilters) -> bool:
+def _matches(node: Node, traffic: dict | None, filters: QueryFilters) -> bool:
     if not _within(_kind_value(traffic, filters.traffic_kind), filters.traffic_min, filters.traffic_max):
         return False
-    cpu = None if resource is None else resource.get("cpu_avg")
-    ram = None if resource is None else resource.get("ram_percent_avg")
-    disk = None if resource is None else resource.get("disk_percent_avg")
-    if not _within(cpu, filters.cpu_min, filters.cpu_max):
+    if not _within(node.last_cpu_percent, filters.cpu_min, filters.cpu_max):
         return False
-    if not _within(ram, filters.ram_min, filters.ram_max):
+    if not _within(percent(node.last_ram_used_bytes, node.last_ram_total_bytes), filters.ram_min, filters.ram_max):
         return False
-    if not _within(disk, filters.disk_min, filters.disk_max):
+    if not _within(percent(node.last_disk_used_bytes, node.last_disk_total_bytes), filters.disk_min, filters.disk_max):
         return False
     return True
 
 
-def _sort_value(node: Node, filters: QueryFilters, traffic: dict | None, resource: dict | None, reverse: bool):
+def _sort_value(node: Node, filters: QueryFilters, traffic: dict | None, reverse: bool):
     key = filters.sort.lstrip("-")
     if key == "name":
         value = node.name.lower()
@@ -359,9 +356,9 @@ def _sort_value(node: Node, filters: QueryFilters, traffic: dict | None, resourc
     if key == "traffic":
         value = _kind_value(traffic, filters.traffic_kind)
     elif key == "cpu":
-        value = None if resource is None else resource.get("cpu_avg")
+        value = node.last_cpu_percent
     else:
-        value = None if resource is None else resource.get("ram_percent_avg")
+        value = percent(node.last_ram_used_bytes, node.last_ram_total_bytes)
     if value is None:
         return (1, 0)
     return (0, -value if reverse else value)
@@ -373,9 +370,9 @@ def matching_nodes(filters: QueryFilters) -> tuple[list[Node], dict, dict]:
     traffic = per_node_traffic(ids, filters.start, filters.end)
     resources = per_node_resources(ids, filters.start, filters.end)
     if _metric_filters_active(filters):
-        nodes = [node for node in nodes if _matches(traffic.get(node.id), resources.get(node.id), filters)]
+        nodes = [node for node in nodes if _matches(node, traffic.get(node.id), filters)]
     reverse = filters.sort.startswith("-")
-    nodes.sort(key=lambda node: _sort_value(node, filters, traffic.get(node.id), resources.get(node.id), reverse))
+    nodes.sort(key=lambda node: _sort_value(node, filters, traffic.get(node.id), reverse))
     return nodes, traffic, resources
 
 
@@ -893,7 +890,35 @@ def _five_resource_points(node_ids: list[int], slots: list[datetime]) -> dict[da
             "disk_percent": disk,
             "count": int(count or 0),
         }
+    if len(node_ids) == 1:
+        _overlay_latest_resources(points, node_ids[0], slots[0], slots[-1] + timedelta(minutes=5))
     return points
+
+
+def _overlay_latest_resources(points: dict[datetime, dict], node_id: int, start: datetime, end: datetime) -> None:
+    """یک نود: هر گام پنج‌دقیقه‌ای آخرین گزارش همان گام را نشان می‌دهد، نه میانگین را."""
+    sql = """
+        SELECT bucket_start, cpu_percent, ram_percent, disk_percent
+        FROM (
+            SELECT datetime((CAST(strftime('%s', collected_at) AS INTEGER) / 300) * 300, 'unixepoch') AS bucket_start,
+                   cpu_percent,
+                   CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END AS ram_percent,
+                   CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END AS disk_percent,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY datetime((CAST(strftime('%s', collected_at) AS INTEGER) / 300) * 300, 'unixepoch')
+                       ORDER BY collected_at DESC
+                   ) AS rn
+            FROM node_metric_sample
+            WHERE collected_at >= ? AND collected_at < ? AND node_id = ?
+        ) ranked
+        WHERE rn = 1
+    """
+    for bucket, cpu, ram, disk in db.execute_sql(sql, [start, end, node_id]).fetchall():
+        slot = _parse_dt(bucket).replace(microsecond=0)
+        current = points.setdefault(slot, {"cpu_max": None, "cpu_min": None, "count": 1})
+        current["cpu_avg"] = cpu
+        current["ram_percent"] = ram
+        current["disk_percent"] = disk
 
 
 def _traffic_datasets(columns: dict[str, list]) -> list[dict]:
@@ -1103,8 +1128,7 @@ def _bucket_resources(node_ids: list[int], filters: QueryFilters, bucket: str) -
 
 def _resource_datasets(columns: dict[str, list]) -> list[dict]:
     return [
-        {"key": "cpu_avg", "label": "CPU average", "unit": "percent", "data": columns.get("cpu_avg", [])},
-        {"key": "cpu_max", "label": "CPU max", "unit": "percent", "data": columns.get("cpu_max", [])},
+        {"key": "cpu_avg", "label": "CPU", "unit": "percent", "data": columns.get("cpu_avg", [])},
         {"key": "ram_percent", "label": "RAM", "unit": "percent", "data": columns.get("ram_percent", [])},
         {"key": "disk_percent", "label": "Disk", "unit": "percent", "data": columns.get("disk_percent", [])},
     ]
@@ -1233,8 +1257,7 @@ def group_detail_stats(group: NodeGroup, filters: QueryFilters) -> dict:
                 "total_bytes": block["total_bytes"],
                 "total_text": block["total_text"],
                 "share_percent": share,
-                "cpu_avg": (resources.get(node.id) or {}).get("cpu_avg"),
-                "ram_percent_avg": (resources.get(node.id) or {}).get("ram_percent_avg"),
+                "cpu_percent": node.last_cpu_percent,
             }
         )
     counts = _status_counts(nodes)
@@ -1316,7 +1339,7 @@ def list_alerts(filters: QueryFilters, status: str | None) -> dict:
 
 
 def export_traffic_csv(filters: QueryFilters) -> str:
-    nodes, traffic, resources = matching_nodes(filters)
+    nodes, traffic, _resources = matching_nodes(filters)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
@@ -1329,16 +1352,17 @@ def export_traffic_csv(filters: QueryFilters) -> str:
             "total_bytes",
             "rx_bps_avg",
             "tx_bps_avg",
-            "cpu_avg",
-            "ram_percent_avg",
-            "disk_percent_avg",
+            "cpu_percent",
+            "ram_percent",
+            "disk_percent",
             "from",
             "to",
         ]
     )
     for node in nodes[:50000]:
         block = _traffic_public(traffic.get(node.id))
-        resource = resources.get(node.id) or {}
+        ram_percent = percent(node.last_ram_used_bytes, node.last_ram_total_bytes)
+        disk_percent = percent(node.last_disk_used_bytes, node.last_disk_total_bytes)
         writer.writerow(
             [
                 node.node_id,
@@ -1349,9 +1373,9 @@ def export_traffic_csv(filters: QueryFilters) -> str:
                 "" if block["total_bytes"] is None else block["total_bytes"],
                 "" if block["rx_bps_avg"] is None else round(block["rx_bps_avg"], 3),
                 "" if block["tx_bps_avg"] is None else round(block["tx_bps_avg"], 3),
-                "" if resource.get("cpu_avg") is None else round(resource["cpu_avg"], 2),
-                "" if resource.get("ram_percent_avg") is None else round(resource["ram_percent_avg"], 2),
-                "" if resource.get("disk_percent_avg") is None else round(resource["disk_percent_avg"], 2),
+                "" if node.last_cpu_percent is None else round(node.last_cpu_percent, 2),
+                "" if ram_percent is None else ram_percent,
+                "" if disk_percent is None else disk_percent,
                 isoformat(filters.start),
                 isoformat(filters.end),
             ]
