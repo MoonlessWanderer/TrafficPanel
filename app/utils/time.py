@@ -134,3 +134,26 @@ def local_day_start(value: datetime) -> datetime:
     aware = value.replace(tzinfo=timezone.utc).astimezone(zone)
     start_local = aware.replace(hour=0, minute=0, second=0, microsecond=0)
     return start_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def local_hour_start(value: datetime) -> datetime:
+    value = as_utc(value)
+    zone = ZoneInfo(settings.timezone)
+    aware = value.replace(tzinfo=timezone.utc).astimezone(zone)
+    start_local = aware.replace(minute=0, second=0, microsecond=0)
+    return start_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def stable_utc_offset(start: datetime, end: datetime) -> timedelta | None:
+    """اختلاف ثابت منطقه در این بازه. اگر ساعت تابستانی وسط بازه عوض شود، None."""
+    zone = ZoneInfo(settings.timezone)
+    moments = [as_utc(start), as_utc(end)]
+    if as_utc(end) - as_utc(start) > timedelta(days=1):
+        moments.append(as_utc(start) + (as_utc(end) - as_utc(start)) / 2)
+    offsets = []
+    for moment in moments:
+        aware = moment.replace(tzinfo=timezone.utc).astimezone(zone)
+        offsets.append(aware.utcoffset() or timedelta(0))
+    if len(set(offsets)) != 1:
+        return None
+    return offsets[0]

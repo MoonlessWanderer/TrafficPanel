@@ -297,9 +297,73 @@ def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
     cpu = [value for value in resources.json()["data"]["datasets"][0]["data"] if value is not None]
     assert len(cpu) >= 4
     week = client.get("/api/v1/charts/traffic?preset=7d&node_ids=" + node_id)
-    assert week.json()["data"]["range"]["bucket"] == "5min"
+    assert week.json()["data"]["range"]["bucket"] == "hour"
     week_rx = [value for value in week.json()["data"]["datasets"][0]["data"] if value]
     assert len(week_rx) >= 4
+
+
+def _label_gaps(labels: list[str]) -> list[float]:
+    moments = [datetime.fromisoformat(item.replace("Z", "+00:00")) for item in labels]
+    return [(moments[index + 1] - moments[index]).total_seconds() for index in range(len(moments) - 1)]
+
+
+def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch):
+    from app.utils.time import as_utc, local_hour_start, utcnow
+    import app.services.ingest as ingest
+
+    monkeypatch.setattr(ingest, "_checked_time", lambda collected_at: (as_utc(collected_at), utcnow()))
+    created = _create_node(client, "coarse")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    anchor = local_hour_start(datetime.now(timezone.utc) - timedelta(hours=2)).replace(tzinfo=timezone.utc)
+    first = anchor + timedelta(minutes=55)
+    second = anchor + timedelta(hours=1, minutes=4)
+    assert _ingest(client, node_id, key, first, 0, 0, "nonce-coarse-0001", cpu=10).status_code == 200
+    assert _ingest(client, node_id, key, first + timedelta(seconds=30), 2_400, 0, "nonce-coarse-0002", cpu=40).status_code == 200
+    assert _ingest(client, node_id, key, second, 2_400, 0, "nonce-coarse-0003", cpu=15).status_code == 200
+    assert _ingest(client, node_id, key, second + timedelta(seconds=30), 3_000, 0, "nonce-coarse-0004", cpu=55).status_code == 200
+
+    fine = client.get(f"/api/v1/charts/traffic?preset=6h&node_ids={node_id}").json()["data"]
+    assert fine["range"]["bucket"] == "5min"
+    assert sorted(value for value in fine["datasets"][0]["data"] if value) == [600, 2_400]
+
+    week = client.get(f"/api/v1/charts/traffic?preset=7d&node_ids={node_id}").json()["data"]
+    assert week["range"]["bucket"] == "hour"
+    assert len(week["labels"]) in {167, 168}
+    assert set(_label_gaps(week["labels"])) == {3600}
+    assert sorted(value for value in week["datasets"][0]["data"] if value) == [600, 2_400]
+    cpu = client.get(f"/api/v1/charts/resources?preset=7d&node_ids={node_id}").json()["data"]
+    assert cpu["range"]["bucket"] == "hour"
+    assert sorted(value for value in cpu["datasets"][0]["data"] if value is not None) == [40, 55]
+
+    month = client.get("/api/v1/charts/traffic?preset=30d").json()["data"]
+    assert month["range"]["bucket"] == "day"
+    assert len(month["labels"]) == 30
+    assert set(_label_gaps(month["labels"])) == {86400}
+    assert client.get("/api/v1/charts/traffic?preset=24h").json()["data"]["range"]["bucket"] == "5min"
+    assert len(client.get("/api/v1/charts/traffic?preset=24h").json()["data"]["labels"]) == 288
+    assert client.get("/api/v1/charts/traffic?preset=yesterday").json()["data"]["range"]["bucket"] == "5min"
+    assert client.get("/api/v1/charts/traffic?preset=month").json()["data"]["range"]["bucket"] == "day"
+
+    now = datetime.now(timezone.utc)
+    custom_hour = client.get(
+        "/api/v1/charts/traffic",
+        params={"from": _stamp(now - timedelta(hours=2)), "to": _stamp(now)},
+    ).json()["data"]
+    assert custom_hour["range"]["bucket"] == "5min"
+    assert len(custom_hour["labels"]) == 24
+    custom_week = client.get(
+        "/api/v1/charts/traffic",
+        params={"from": _stamp(now - timedelta(days=3)), "to": _stamp(now)},
+    ).json()["data"]
+    assert custom_week["range"]["bucket"] == "hour"
+    assert len(custom_week["labels"]) in {71, 72}
+    custom_month = client.get(
+        "/api/v1/charts/traffic",
+        params={"from": _stamp(now - timedelta(days=10)), "to": _stamp(now)},
+    ).json()["data"]
+    assert custom_month["range"]["bucket"] == "day"
+    assert len(custom_month["labels"]) == 10
 
 
 def test_five_minute_chart_keeps_one_bucket_and_uses_the_latest_cpu(client, admin):

@@ -23,12 +23,21 @@ from app.models import (
     NodeMetricSample,
     TrafficInterval,
 )
-from app.services.aggregates import refresh_five_minute
+from app.services.aggregates import refresh_daily, refresh_five_minute, refresh_hourly
 from app.services.filters import QueryFilters
 from app.services.nics import counted_interface, counted_sql, is_virtual_interface
 from app.services.present import group_payload, node_payload, node_status, percent, status_cutoff
 from app.utils.jsonbox import load_json
-from app.utils.time import as_utc, five_minute_slots, hour_bucket, isoformat, local_day_start, utcnow
+from app.utils.time import (
+    as_utc,
+    five_minute_slots,
+    hour_bucket,
+    isoformat,
+    local_day_start,
+    local_hour_start,
+    stable_utc_offset,
+    utcnow,
+)
 from app.utils.units import format_bps, format_bytes
 
 SPEED_METHOD = (
@@ -852,6 +861,180 @@ def _prepare_five_minute(filters: QueryFilters) -> list[datetime]:
     return five_minute_slots(start, end)
 
 
+def chart_bucket(filters: QueryFilters) -> str:
+    """گام خط نمودار. جمع حجم بازه جدا از این گام حساب می‌شود."""
+    if filters.preset in {"1h", "6h", "24h", "today", "yesterday"}:
+        return "5min"
+    if filters.preset == "7d":
+        return "hour"
+    if filters.preset in {"30d", "month"}:
+        return "day"
+    span = as_utc(filters.end) - as_utc(filters.start)
+    if span <= timedelta(hours=24):
+        return "5min"
+    if span <= timedelta(days=7):
+        return "hour"
+    return "day"
+
+
+def _coarse_slots(filters: QueryFilters, bucket: str) -> list[datetime]:
+    start = as_utc(filters.start)
+    end = as_utc(filters.end)
+    if start >= end:
+        return []
+    if bucket == "hour":
+        cursor = local_hour_start(start)
+        step = timedelta(hours=1)
+    else:
+        cursor = local_day_start(start)
+        step = timedelta(days=1)
+    if cursor < start:
+        cursor += step
+    slots: list[datetime] = []
+    while cursor < end:
+        slots.append(cursor.replace(microsecond=0))
+        cursor += step
+    return slots
+
+
+def _prepare_chart(filters: QueryFilters) -> tuple[str, list[datetime]]:
+    bucket = chart_bucket(filters)
+    if bucket == "5min":
+        return bucket, _prepare_five_minute(filters)
+    slots = _coarse_slots(filters, bucket)
+    start = as_utc(filters.start)
+    end = as_utc(filters.end)
+    if start < end:
+        refresh_five_minute(start, end)
+    return bucket, slots
+
+
+def _sqlite_shift(offset: timedelta, invert: bool = False) -> str:
+    seconds = int(offset.total_seconds())
+    if invert:
+        seconds = -seconds
+    sign = "+" if seconds >= 0 else "-"
+    seconds = abs(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    return f"'{sign}{hours} hours', '{sign}{minutes} minutes'"
+
+
+def _local_slot_expr(offset: timedelta, bucket: str) -> str:
+    pattern = "%Y-%m-%d %H:00:00" if bucket == "hour" else "%Y-%m-%d 00:00:00"
+    return (
+        f"datetime(strftime('{pattern}', datetime(bucket_start, {_sqlite_shift(offset)})), "
+        f"{_sqlite_shift(offset, invert=True)})"
+    )
+
+
+def _slot_of(moment: datetime, bucket: str) -> datetime:
+    if bucket == "hour":
+        return local_hour_start(moment).replace(microsecond=0)
+    return local_day_start(moment).replace(microsecond=0)
+
+
+def _sum_iface_slots(rows, allowed: set[datetime]) -> dict[datetime, dict]:
+    merged: dict[tuple, list] = {}
+    for node_id, iface, slot, rx, tx, dur, count in rows:
+        moment = _parse_dt(slot).replace(microsecond=0)
+        if moment not in allowed:
+            continue
+        key = (moment, int(node_id), str(iface))
+        current = merged.setdefault(key, [0, 0, 0.0, 0])
+        current[0] += int(rx or 0)
+        current[1] += int(tx or 0)
+        current[2] += float(dur or 0)
+        current[3] += int(count or 0)
+    grouped: dict[datetime, list] = {}
+    for (moment, _node_id, _iface), item in merged.items():
+        grouped.setdefault(moment, []).append(item)
+    points: dict[datetime, dict] = {}
+    for moment, items in grouped.items():
+        count = sum(item[3] for item in items)
+        if count <= 0:
+            continue
+        rx_bps = 0.0
+        tx_bps = 0.0
+        known = False
+        for rx, tx, dur, _count in items:
+            if dur > 0:
+                rx_bps += rx / dur
+                tx_bps += tx / dur
+                known = True
+        points[moment] = {
+            "rx": sum(item[0] for item in items),
+            "tx": sum(item[1] for item in items),
+            "rx_bps": rx_bps if known else None,
+            "tx_bps": tx_bps if known else None,
+            "count": count,
+        }
+    return points
+
+
+def _five_rows_by_slot(node_ids: list[int], start: datetime, end: datetime, bucket: str) -> list:
+    if not node_ids or start >= end:
+        return []
+    ph = _placeholders(len(node_ids))
+    offset = stable_utc_offset(start, end)
+    if offset is None:
+        sql = f"""
+            SELECT node_id, interface_name, bucket_start, rx_bytes, tx_bytes, duration_seconds, sample_count
+            FROM traffic_five_minute_aggregate
+            WHERE {counted_sql()} AND sample_count > 0
+              AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
+        """
+        folded = []
+        for node_id, iface, moment, rx, tx, dur, count in db.execute_sql(sql, [start, end, *node_ids]).fetchall():
+            slot = _slot_of(_parse_dt(moment), bucket)
+            folded.append((node_id, iface, slot, rx, tx, dur, count))
+        return folded
+    slot = _local_slot_expr(offset, bucket)
+    sql = f"""
+        SELECT node_id, interface_name, {slot} AS slot,
+               SUM(rx_bytes), SUM(tx_bytes), SUM(duration_seconds), SUM(sample_count)
+        FROM traffic_five_minute_aggregate
+        WHERE {counted_sql()} AND sample_count > 0
+          AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
+        GROUP BY node_id, interface_name, slot
+    """
+    return list(db.execute_sql(sql, [start, end, *node_ids]).fetchall())
+
+
+def _fill_old_traffic_days(points: dict[datetime, dict], node_ids: list[int], slots: list[datetime]) -> None:
+    earliest = utcnow() - timedelta(days=int(settings.five_minute_retention_days))
+    missing = [slot for slot in slots if slot < earliest and slot not in points]
+    if not missing or not node_ids:
+        return
+    refresh_hourly(missing[0], missing[-1] + timedelta(days=1))
+    refresh_daily(missing[0], missing[-1] + timedelta(days=1))
+    ph = _placeholders(len(node_ids))
+    sql = f"""
+        SELECT node_id, interface_name, bucket_start, rx_bytes, tx_bytes, duration_seconds, sample_count
+        FROM traffic_daily_aggregate
+        WHERE {counted_sql()} AND sample_count > 0
+          AND bucket_start >= ? AND bucket_start <= ? AND node_id IN ({ph})
+    """
+    rows = db.execute_sql(sql, [missing[0], missing[-1], *node_ids]).fetchall()
+    points.update(_sum_iface_slots(rows, set(missing)))
+
+
+def _coarse_traffic_points(node_ids: list[int], slots: list[datetime], bucket: str, end: datetime) -> dict[datetime, dict]:
+    if not node_ids or not slots:
+        return {}
+    rows = _five_rows_by_slot(node_ids, slots[0], as_utc(end), bucket)
+    points = _sum_iface_slots(rows, set(slots))
+    if bucket == "day":
+        _fill_old_traffic_days(points, node_ids, slots)
+    return points
+
+
+def _traffic_points(node_ids: list[int], slots: list[datetime], bucket: str, end: datetime) -> dict[datetime, dict]:
+    if bucket == "5min":
+        return _five_traffic_points(node_ids, slots)
+    return _coarse_traffic_points(node_ids, slots, bucket, end)
+
+
 def _five_traffic_points(node_ids: list[int], slots: list[datetime]) -> dict[datetime, dict]:
     if not node_ids or not slots:
         return {}
@@ -953,11 +1136,11 @@ def traffic_chart(filters: QueryFilters, mode: str = "total") -> dict:
         return _group_traffic_chart(filters, nodes)
     if mode == "nodes":
         return _node_traffic_chart(filters, nodes)
-    slots = _prepare_five_minute(filters)
-    points = _five_traffic_points([node.id for node in nodes], slots)
+    bucket, slots = _prepare_chart(filters)
+    points = _traffic_points([node.id for node in nodes], slots, bucket, filters.end)
     packed = _series_from_points(slots, points, ["rx", "tx", "rx_bps", "tx_bps"])
     return {
-        "range": range_meta(filters, "5min"),
+        "range": range_meta(filters, bucket),
         "labels": packed["labels"],
         "datasets": _traffic_datasets(packed["columns"]),
     }
@@ -991,15 +1174,15 @@ def _daily_points(node_ids: list[int], filters: QueryFilters) -> dict[datetime, 
 
 
 def _node_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
-    slots = _prepare_five_minute(filters)
+    bucket, slots = _prepare_chart(filters)
     labels = [isoformat(slot) for slot in slots]
     datasets = []
     for node in nodes:
-        points = _five_traffic_points([node.id], slots)
+        points = _traffic_points([node.id], slots, bucket, filters.end)
         data = [None if points.get(slot) is None else points[slot]["rx"] + points[slot]["tx"] for slot in slots]
         label = "Removed node" if node_status(node) == "removed" else node.name
         datasets.append({"key": node.node_id, "label": label, "unit": "bytes", "data": data})
-    return {"range": range_meta(filters, "5min"), "labels": labels, "datasets": datasets}
+    return {"range": range_meta(filters, bucket), "labels": labels, "datasets": datasets}
 
 
 def _group_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
@@ -1010,7 +1193,7 @@ def _group_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
         raise AppError("too_many", "Select at most 8 groups to compare.", 422)
     node_by_id = {node.id: node for node in nodes}
     memberships = NodeGroupMembership.select()
-    slots = _prepare_five_minute(filters)
+    bucket, slots = _prepare_chart(filters)
     labels = [isoformat(slot) for slot in slots]
     datasets = []
     for group in groups:
@@ -1019,21 +1202,121 @@ def _group_traffic_chart(filters: QueryFilters, nodes: list[Node]) -> dict:
             for membership in memberships
             if membership.group_id == group.id and membership.node_id in node_by_id
         ]
-        points = _five_traffic_points(member_ids, slots)
+        points = _traffic_points(member_ids, slots, bucket, filters.end)
         data = []
         for slot in slots:
             point = points.get(slot)
             data.append(None if point is None else (point["rx"] or 0) + (point["tx"] or 0))
         datasets.append({"key": str(group.id), "label": group.name, "unit": "bytes", "color": group.color, "data": data})
-    return {"range": range_meta(filters, "5min"), "labels": labels, "datasets": datasets}
+    return {"range": range_meta(filters, bucket), "labels": labels, "datasets": datasets}
+
+
+def _resource_point(cpu, ram, disk, count: int) -> dict:
+    return {
+        "cpu_avg": cpu,
+        "cpu_max": None,
+        "cpu_min": None,
+        "ram_percent": ram,
+        "disk_percent": disk,
+        "count": count,
+    }
+
+
+def _coarse_resource_points(node_ids: list[int], slots: list[datetime], bucket: str, end: datetime) -> dict[datetime, dict]:
+    if not node_ids or not slots:
+        return {}
+    allowed = set(slots)
+    ph = _placeholders(len(node_ids))
+    sql = f"""
+        SELECT node_id, bucket_start, cpu_avg, ram_percent_avg, disk_percent_avg, resource_samples
+        FROM traffic_five_minute_aggregate
+        WHERE interface_name = '*' AND resource_samples > 0
+          AND bucket_start >= ? AND bucket_start < ? AND node_id IN ({ph})
+    """
+    grouped: dict[datetime, list] = {}
+    for node_id, moment, cpu, ram, disk, count in db.execute_sql(sql, [slots[0], as_utc(end), *node_ids]).fetchall():
+        slot = _slot_of(_parse_dt(moment), bucket)
+        if slot not in allowed:
+            continue
+        grouped.setdefault(slot, []).append((int(node_id), _parse_dt(moment), cpu, ram, disk, int(count or 0)))
+    points: dict[datetime, dict] = {}
+    single = len(node_ids) == 1
+    for slot, items in grouped.items():
+        if single:
+            _node_id, _moment, cpu, ram, disk, count = max(items, key=lambda item: item[1])
+            points[slot] = _resource_point(cpu, ram, disk, count)
+            continue
+        weight = sum(item[5] for item in items)
+        if weight <= 0:
+            continue
+        points[slot] = _resource_point(
+            sum((item[2] or 0) * item[5] for item in items) / weight,
+            sum((item[3] or 0) * item[5] for item in items if item[3] is not None) / weight,
+            sum((item[4] or 0) * item[5] for item in items if item[4] is not None) / weight,
+            weight,
+        )
+    if single:
+        _overlay_raw_on_slots(points, node_ids[0], allowed, bucket, slots[0], as_utc(end))
+    if bucket == "day":
+        _fill_old_resource_days(points, node_ids, slots)
+    return points
+
+
+def _overlay_raw_on_slots(points: dict[datetime, dict], node_id: int, allowed: set[datetime], bucket: str, start: datetime, end: datetime) -> None:
+    rows = db.execute_sql(
+        """
+        SELECT collected_at, cpu_percent,
+               CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END,
+               CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END
+        FROM node_metric_sample
+        WHERE node_id = ? AND collected_at >= ? AND collected_at < ?
+        ORDER BY collected_at
+        """,
+        (node_id, start, end),
+    ).fetchall()
+    for collected_at, cpu, ram, disk in rows:
+        slot = _slot_of(_parse_dt(collected_at), bucket)
+        if slot not in allowed:
+            continue
+        points[slot] = _resource_point(cpu, ram, disk, 1)
+
+
+def _fill_old_resource_days(points: dict[datetime, dict], node_ids: list[int], slots: list[datetime]) -> None:
+    earliest = utcnow() - timedelta(days=int(settings.five_minute_retention_days))
+    missing = [slot for slot in slots if slot < earliest and slot not in points]
+    if not missing or not node_ids:
+        return
+    refresh_hourly(missing[0], missing[-1] + timedelta(days=1))
+    refresh_daily(missing[0], missing[-1] + timedelta(days=1))
+    ph = _placeholders(len(node_ids))
+    sql = f"""
+        SELECT bucket_start,
+               SUM(cpu_avg * resource_samples) / SUM(resource_samples),
+               SUM(ram_percent_avg * resource_samples) / SUM(resource_samples),
+               SUM(disk_percent_avg * resource_samples) / SUM(resource_samples),
+               SUM(resource_samples)
+        FROM traffic_daily_aggregate
+        WHERE interface_name = '*' AND resource_samples > 0
+          AND bucket_start >= ? AND bucket_start <= ? AND node_id IN ({ph})
+        GROUP BY bucket_start
+    """
+    allowed = set(missing)
+    for moment, cpu, ram, disk, count in db.execute_sql(sql, [missing[0], missing[-1], *node_ids]).fetchall():
+        slot = _parse_dt(moment).replace(microsecond=0)
+        if slot in allowed and int(count or 0) > 0:
+            points[slot] = _resource_point(cpu, ram, disk, int(count or 0))
 
 
 def resource_chart(filters: QueryFilters) -> dict:
     nodes, _traffic, _resources = matching_nodes(filters)
-    slots = _prepare_five_minute(filters)
-    points = _five_resource_points([node.id for node in nodes], slots)
+    bucket, slots = _prepare_chart(filters)
+    node_ids = [node.id for node in nodes]
+    if bucket == "5min":
+        points = _five_resource_points(node_ids, slots)
+    else:
+        points = _coarse_resource_points(node_ids, slots, bucket, filters.end)
     packed = _series_from_points(slots, points, ["cpu_avg", "cpu_max", "cpu_min", "ram_percent", "disk_percent"])
-    return {"range": range_meta(filters, "5min"), "labels": packed["labels"], "datasets": _resource_datasets(packed["columns"])}
+    return {"range": range_meta(filters, bucket), "labels": packed["labels"], "datasets": _resource_datasets(packed["columns"])}
 
 
 def _raw_resources(node_ids: list[int], filters: QueryFilters) -> dict:

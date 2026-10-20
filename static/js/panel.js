@@ -221,9 +221,14 @@
     return { year: read("year"), month: read("month"), day: read("day"), hour: read("hour") % 24, minute: read("minute") };
   }
 
-  function tickStep(spanMs) {
+  function tickStep(spanMs, bucket) {
     const hour = 3600 * 1000;
     const day = 24 * hour;
+    if (bucket === "day") {
+      if (spanMs <= 7 * day) return { unit: "day", step: 1 };
+      if (spanMs <= 31 * day) return { unit: "day", step: 5 };
+      return { unit: "day", step: 7 };
+    }
     if (spanMs <= hour) return { unit: "minute", step: 5 };
     if (spanMs <= 6 * hour) return { unit: "hour", step: 1 };
     if (spanMs <= day) return { unit: "hour", step: 3 };
@@ -387,7 +392,7 @@
     return scale;
   }
 
-  function drawChart(id, labels, datasets, yUnit) {
+  function drawChart(id, labels, datasets, yUnit, bucket) {
     const canvas = document.getElementById(id);
     if (!canvas || !window.Chart) return;
     if (charts[id]) charts[id].destroy();
@@ -397,7 +402,7 @@
     const colors = chartColors();
     const rawLabels = labels || [];
     const span = rawLabels.length > 1 ? new Date(rawLabels[rawLabels.length - 1]) - new Date(rawLabels[0]) : 0;
-    const step = tickStep(span);
+    const step = tickStep(span, bucket);
     charts[id] = new Chart(canvas, {
       type: "line",
       data: {
@@ -408,7 +413,7 @@
           borderColor: item.color || palette[index % palette.length],
           backgroundColor: "transparent",
           spanGaps: false,
-          pointRadius: rawLabels.length > 12 ? 0 : 2,
+          pointRadius: bucket === "day" ? 2 : rawLabels.length > 12 ? 0 : 2,
           pointHoverRadius: 4,
           borderWidth: 2,
           tension: 0.25,
@@ -425,7 +430,8 @@
           tooltip: {
             callbacks: {
               title(items) {
-                return formatWhen(rawLabels[items[0]?.dataIndex]);
+                const iso = rawLabels[items[0]?.dataIndex];
+                return bucket === "day" ? formatTick(iso, "day") : formatWhen(iso);
               },
               label(context) {
                 const unit = source[context.datasetIndex]?.unit || yUnit;
@@ -456,10 +462,10 @@
     });
   }
 
-  function bindChartView(buttonId, chartId, labels, datasets) {
+  function bindChartView(buttonId, chartId, labels, datasets, bucket) {
     const box = document.getElementById(buttonId);
     let view = "volume";
-    const paint = () => drawChart(chartId, labels, datasets, view === "speed" ? "bps" : "bytes");
+    const paint = () => drawChart(chartId, labels, datasets, view === "speed" ? "bps" : "bytes", bucket);
     paint();
     if (!box) return;
     box.onclick = (event) => {
@@ -531,7 +537,7 @@
       card("Upload", textOf(trafficBlock, "tx_text"), nowHint(trafficBlock.tx_bps_now_text?.text)),
       card("Total usage", textOf(trafficBlock, "total_text"), ""),
     ].join("");
-    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
+    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
     $("#top-nodes").innerHTML = data.top_nodes.length
       ? `<div class="table-wrap"><table><tbody>${data.top_nodes.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="empty">No data has been recorded for this range.</p>`;
@@ -672,8 +678,8 @@
       card("Disk", info.disk.percent == null ? "—" : `${info.disk.percent.toFixed(1)}%`, info.disk.total_text?.text ? `<bdi>${escapeHtml(info.disk.used_text?.text || "—")}</bdi> of <bdi>${escapeHtml(info.disk.total_text.text)}</bdi>` : ""),
       card("Uptime", info.uptime_seconds == null ? "—" : `<bdi>${Math.floor(info.uptime_seconds / 3600)}</bdi> h`, ""),
     ].join("");
-    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
-    drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent");
+    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
+    drawChart("resource-chart", resources.data.labels, resources.data.datasets, "percent", resources.data.range?.bucket);
     $("#iface-rows").innerHTML = stats.data.interfaces.length
       ? stats.data.interfaces.map((item) => `<tr><td class="ltr">${escapeHtml(item.name)}</td><td class="num">${escapeHtml(item.rx_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_text?.text || "—")}</td><td class="num">${escapeHtml(item.rx_bps_text?.text || "—")}</td><td class="num">${escapeHtml(item.tx_bps_text?.text || "—")}</td><td class="num">${item.rx_errors ?? "—"} / ${item.tx_errors ?? "—"}</td></tr>`).join("")
       : `<tr><td colspan="6">No data has been recorded for this range.</td></tr>`;
@@ -767,7 +773,7 @@
       card("Download", textOf(trafficBlock, "rx_text"), nowHint(trafficBlock.rx_bps_now_text?.text)),
       card("Upload", textOf(trafficBlock, "tx_text"), nowHint(trafficBlock.tx_bps_now_text?.text)),
     ].join("");
-    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
+    bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets, traffic.data.range?.bucket);
     drawBar("share-chart", data.ranking.map((item) => item.status === "removed" ? "Removed node" : item.name), data.ranking.map((item) => item.share_percent || 0));
     $("#rank-rows").innerHTML = data.ranking.length
       ? data.ranking.map((item) => `<tr><td>${item.status === "removed" ? "Removed node" : `<a href="/nodes/${encodeURIComponent(item.node_id)}">${escapeHtml(item.name)}</a>`}</td><td>${item.status === "removed" ? "" : statusPill(item.status)}</td><td class="num">${escapeHtml(item.total_text?.text || "—")}</td><td class="num">${item.share_percent == null ? "—" : item.share_percent.toFixed(1) + "%"}</td><td class="num">${item.cpu_percent == null ? "—" : item.cpu_percent.toFixed(1) + "%"}</td><td><button class="btn ghost" type="button" data-remove="${escapeHtml(item.node_id)}">Remove</button></td></tr>`).join("")
@@ -868,7 +874,7 @@
       try {
         const path = form.kind.value === "nodes" ? "/api/v1/compare/nodes" : "/api/v1/compare/groups";
         const result = await api(`${path}?${next.toString()}`);
-        drawChart("compare-chart", result.data.chart.labels, result.data.chart.datasets, "bytes");
+        drawChart("compare-chart", result.data.chart.labels, result.data.chart.datasets, "bytes", result.data.chart.range?.bucket);
         const comparingNodes = result.data.items.some((item) => item.node);
         const rows = result.data.items.map((item) => {
           if (item.node) {
