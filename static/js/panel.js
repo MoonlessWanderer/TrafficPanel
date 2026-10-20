@@ -508,6 +508,10 @@
     return block[field]?.text || fallback;
   }
 
+  function nowHint(text) {
+    return text ? `Now ${text}` : "";
+  }
+
   async function loadDashboard() {
     setState("Loading…");
     const query = queryString();
@@ -523,8 +527,8 @@
       card("Offline", data.nodes.offline, ""),
       card("Alerting", data.nodes.alerting, "Open alerts"),
       card("Groups", data.groups.total, ""),
-      card("Download", textOf(trafficBlock, "rx_text"), textOf(trafficBlock, "rx_bps_avg_text", "")),
-      card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_avg_text", "")),
+      card("Download", textOf(trafficBlock, "rx_text"), nowHint(trafficBlock.rx_bps_now_text?.text)),
+      card("Upload", textOf(trafficBlock, "tx_text"), nowHint(trafficBlock.tx_bps_now_text?.text)),
       card("Total usage", textOf(trafficBlock, "total_text"), ""),
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
@@ -661,8 +665,8 @@
     $("#node-cards").innerHTML = [
       card("Status", statusPill(info.status, info.stale), info.last_seen_at ? formatWhen(info.last_seen_at) : "No report has been received yet."),
       card("Key", info.key_active ? `<span class="token">${info.key_prefix}</span>` : "Revoked", info.key_active ? "Key prefix" : ""),
-      card("Download", textOf(block, "rx_text"), textOf(block, "rx_bps_avg_text", "")),
-      card("Upload", textOf(block, "tx_text"), textOf(block, "tx_bps_avg_text", "")),
+      card("Download", textOf(block, "rx_text"), nowHint(info.status === "online" ? info.speed?.rx_text?.text : "")),
+      card("Upload", textOf(block, "tx_text"), nowHint(info.status === "online" ? info.speed?.tx_text?.text : "")),
       card("CPU", info.cpu_percent == null ? "—" : `${info.cpu_percent.toFixed(1)}%`, ""),
       card("RAM", info.ram.percent == null ? "—" : `${info.ram.percent.toFixed(1)}%`, info.ram.used_text?.text || ""),
       card("Disk", info.disk.percent == null ? "—" : `${info.disk.percent.toFixed(1)}%`, info.disk.total_text?.text ? `<bdi>${escapeHtml(info.disk.used_text?.text || "—")}</bdi> of <bdi>${escapeHtml(info.disk.total_text.text)}</bdi>` : ""),
@@ -760,8 +764,8 @@
     $("#group-cards").innerHTML = [
       card("Online", data.counts.online, `of ${data.counts.total}`),
       card("Offline", data.counts.offline, ""),
-      card("Download", textOf(trafficBlock, "rx_text"), textOf(trafficBlock, "rx_bps_avg_text", "")),
-      card("Upload", textOf(trafficBlock, "tx_text"), textOf(trafficBlock, "tx_bps_avg_text", "")),
+      card("Download", textOf(trafficBlock, "rx_text"), nowHint(trafficBlock.rx_bps_now_text?.text)),
+      card("Upload", textOf(trafficBlock, "tx_text"), nowHint(trafficBlock.tx_bps_now_text?.text)),
     ].join("");
     bindChartView("traffic-view", "traffic-chart", traffic.data.labels, traffic.data.datasets);
     drawBar("share-chart", data.ranking.map((item) => item.status === "removed" ? "Removed node" : item.name), data.ranking.map((item) => item.share_percent || 0));

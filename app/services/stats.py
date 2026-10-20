@@ -435,6 +435,21 @@ def _sum_known(values: list[float | None]) -> float | None:
     return float(sum(usable))
 
 
+def _current_speeds(nodes: list[Node]) -> tuple[float | None, float | None]:
+    rx_values = [node.last_rx_bps for node in nodes if node_status(node) == "online" and node.last_rx_bps is not None]
+    tx_values = [node.last_tx_bps for node in nodes if node_status(node) == "online" and node.last_tx_bps is not None]
+    return (float(sum(rx_values)) if rx_values else None, float(sum(tx_values)) if tx_values else None)
+
+
+def _with_current_speed(payload: dict, nodes: list[Node]) -> dict:
+    rx_now, tx_now = _current_speeds(nodes)
+    payload["rx_bps_now"] = rx_now
+    payload["tx_bps_now"] = tx_now
+    payload["rx_bps_now_text"] = format_bps(rx_now)
+    payload["tx_bps_now_text"] = format_bps(tx_now)
+    return payload
+
+
 def _combine_traffic(nodes: list[Node], traffic: dict[int, dict]) -> dict:
     blocks = [_traffic_public(traffic.get(node.id)) for node in nodes]
     active = [block for block in blocks if block["has_data"]]
@@ -442,14 +457,14 @@ def _combine_traffic(nodes: list[Node], traffic: dict[int, dict]) -> dict:
         empty = _traffic_public(None)
         empty["nodes_with_data"] = 0
         empty["nodes_without_data"] = len(nodes)
-        return empty
+        return _with_current_speed(empty, nodes)
     rx = sum(block["rx_bytes"] or 0 for block in active)
     tx = sum(block["tx_bytes"] or 0 for block in active)
     rx_avg = _sum_known([block["rx_bps_avg"] for block in active])
     tx_avg = _sum_known([block["tx_bps_avg"] for block in active])
     rx_max_values = [block["rx_bps_max"] for block in active if block["rx_bps_max"] is not None]
     tx_max_values = [block["tx_bps_max"] for block in active if block["tx_bps_max"] is not None]
-    return {
+    return _with_current_speed({
         "rx_bytes": rx,
         "tx_bytes": tx,
         "total_bytes": rx + tx,
@@ -468,7 +483,7 @@ def _combine_traffic(nodes: list[Node], traffic: dict[int, dict]) -> dict:
         "has_data": True,
         "nodes_with_data": len(active),
         "nodes_without_data": len(nodes) - len(active),
-    }
+    }, nodes)
 
 
 def _combine_resources(nodes: list[Node], resources: dict[int, dict]) -> dict:

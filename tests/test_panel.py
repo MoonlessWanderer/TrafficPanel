@@ -104,6 +104,7 @@ def test_duplicate_reset_gap_and_status(client, admin):
     assert traffic["rx_bytes"] == 1_500
     assert traffic["tx_bytes"] == 400
     assert abs(traffic["rx_bps_avg"] - 50) < 0.1
+    assert abs(traffic["rx_bps_now"] - 50) < 0.1
 
     reset_node = _create_node(client, "reset")
     moment = datetime.now(timezone.utc)
@@ -141,6 +142,21 @@ def test_duplicate_reset_gap_and_status(client, admin):
     assert _ingest(client, node_id, new_key, datetime.now(timezone.utc), 12, 12, "nonce-newkey-00001").status_code == 200
 
 
+def test_current_speed_is_the_latest_interval_not_the_range_average(client, admin):
+    created = _create_node(client, "live")
+    node_id = created["node_id"]
+    key = created["node_key"]
+    end = datetime.now(timezone.utc) - timedelta(seconds=5)
+    assert _ingest(client, node_id, key, end - timedelta(seconds=60), 0, 0, "nonce-live-000001").status_code == 200
+    assert _ingest(client, node_id, key, end - timedelta(seconds=30), 6_000, 0, "nonce-live-000002").status_code == 200
+    assert _ingest(client, node_id, key, end, 6_300, 300, "nonce-live-000003").status_code == 200
+    traffic = client.get("/api/v1/dashboard/summary?preset=1h").json()["data"]["traffic"]
+    assert abs(traffic["rx_bps_avg"] - 105) < 0.1
+    assert abs(traffic["rx_bps_now"] - 10) < 0.1
+    detail = client.get(f"/api/v1/nodes/{node_id}").json()["data"]
+    assert abs(detail["speed"]["rx_bps"] - 10) < 0.1
+
+
 def test_group_stats_follow_membership(client, admin):
     alpha = _create_node(client, "alpha")
     beta = _create_node(client, "beta")
@@ -157,6 +173,7 @@ def test_group_stats_follow_membership(client, admin):
     before = client.get(f"/api/v1/groups/{group_id}/stats?preset=1h").json()["data"]
     assert before["traffic"]["rx_bytes"] == 4_000
     assert abs(before["traffic"]["rx_bps_avg"] - (1_000 / 30 + 3_000 / 30)) < 0.1
+    assert abs(before["traffic"]["rx_bps_now"] - (1_000 / 30 + 3_000 / 30)) < 0.1
     assert before["counts"]["online"] == 2
     chart = client.get(f"/api/v1/charts/traffic?preset=1h&group_ids={group_id}").json()["data"]
     speeds = [value for value in chart["datasets"][2]["data"] if value]
