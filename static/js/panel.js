@@ -293,7 +293,7 @@
     const form = $("#time-form");
     if (!form) return;
     const current = params();
-    form.preset.value = current.get("preset") || "24h";
+    form.preset.value = current.get("preset") || "today";
     form.classList.toggle("custom", form.preset.value === "custom");
     form.preset.onchange = () => form.classList.toggle("custom", form.preset.value === "custom");
     form.onsubmit = (event) => {

@@ -61,7 +61,7 @@ def resolve_range(
         end = as_utc(end)
     chosen = (preset or "").strip().lower()
     if chosen in {"", "custom"} and start is None and end is None:
-        chosen = "24h"
+        chosen = "today"
     elif chosen in {"", "custom"} and (start is not None or end is not None):
         chosen = "custom"
     if chosen not in PRESETS:
