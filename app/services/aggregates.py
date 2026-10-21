@@ -10,8 +10,6 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from peewee import IntegrityError, fn
-
 from app.core.settings import settings
 from app.db.database import connection, db
 from app.models import (
@@ -31,49 +29,54 @@ _lock = threading.Lock()
 _last_retention: datetime | None = None
 
 
-def _upsert_five_minute(node_id: int, interface_name: str, bucket: datetime, values: dict) -> None:
-    row = TrafficFiveMinuteAggregate.get_or_none(
-        (TrafficFiveMinuteAggregate.node == node_id)
-        & (TrafficFiveMinuteAggregate.interface_name == interface_name)
-        & (TrafficFiveMinuteAggregate.bucket_start == bucket)
-    )
-    if row is None:
-        try:
-            TrafficFiveMinuteAggregate.create(
-                node=node_id,
-                interface_name=interface_name,
-                bucket_start=bucket,
-                **values,
-            )
-            return
-        except IntegrityError:
-            row = TrafficFiveMinuteAggregate.get(
-                (TrafficFiveMinuteAggregate.node == node_id)
-                & (TrafficFiveMinuteAggregate.interface_name == interface_name)
-                & (TrafficFiveMinuteAggregate.bucket_start == bucket)
-            )
-    for key, value in values.items():
-        setattr(row, key, value)
-    row.save()
+_AGGREGATE_COLUMNS = """
+    node_id, interface_name, bucket_start,
+    rx_bytes, tx_bytes, rx_bps_avg, tx_bps_avg, rx_bps_max, tx_bps_max,
+    duration_seconds, sample_count,
+    cpu_avg, cpu_max, cpu_min,
+    ram_percent_avg, ram_percent_max, ram_total_bytes, ram_used_avg,
+    disk_percent_avg, disk_percent_max, disk_total_bytes, disk_used_avg,
+    resource_samples
+"""
+
+_TRAFFIC_UPDATE = """
+    rx_bytes = excluded.rx_bytes,
+    tx_bytes = excluded.tx_bytes,
+    rx_bps_avg = excluded.rx_bps_avg,
+    tx_bps_avg = excluded.tx_bps_avg,
+    rx_bps_max = excluded.rx_bps_max,
+    tx_bps_max = excluded.tx_bps_max,
+    duration_seconds = excluded.duration_seconds,
+    sample_count = excluded.sample_count
+"""
+
+_RESOURCE_UPDATE = """
+    cpu_avg = excluded.cpu_avg,
+    cpu_max = excluded.cpu_max,
+    cpu_min = excluded.cpu_min,
+    ram_percent_avg = excluded.ram_percent_avg,
+    ram_percent_max = excluded.ram_percent_max,
+    ram_total_bytes = excluded.ram_total_bytes,
+    ram_used_avg = excluded.ram_used_avg,
+    disk_percent_avg = excluded.disk_percent_avg,
+    disk_percent_max = excluded.disk_percent_max,
+    disk_total_bytes = excluded.disk_total_bytes,
+    disk_used_avg = excluded.disk_used_avg,
+    resource_samples = excluded.resource_samples
+"""
 
 
-def _upsert_hourly(node_id: int, interface_name: str, bucket: datetime, values: dict) -> None:
-    row = TrafficHourlyAggregate.get_or_none(
-        (TrafficHourlyAggregate.node == node_id)
-        & (TrafficHourlyAggregate.interface_name == interface_name)
-        & (TrafficHourlyAggregate.bucket_start == bucket)
+def _write_aggregate(table: str, select_sql: str, update_sql: str, params: tuple) -> int:
+    cursor = db.execute_sql(
+        f"""
+        INSERT INTO {table} ({_AGGREGATE_COLUMNS})
+        {select_sql}
+        ON CONFLICT(node_id, interface_name, bucket_start) DO UPDATE SET
+        {update_sql}
+        """,
+        params,
     )
-    if row is None:
-        TrafficHourlyAggregate.create(
-            node=node_id,
-            interface_name=interface_name,
-            bucket_start=bucket,
-            **values,
-        )
-        return
-    for key, value in values.items():
-        setattr(row, key, value)
-    row.save()
+    return max(cursor.rowcount, 0)
 
 
 def _upsert_daily(node_id: int, interface_name: str, bucket: datetime, values: dict) -> None:
@@ -95,20 +98,42 @@ def _upsert_daily(node_id: int, interface_name: str, bucket: datetime, values: d
     row.save()
 
 
-def _parse_bucket(value) -> datetime:
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    text = str(value)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    return datetime.fromisoformat(text)
-
-
 def _five_minute_expr(column: str) -> str:
     return f"datetime((CAST(strftime('%s', {column}) AS INTEGER) / 300) * 300, 'unixepoch')"
+
+
+def _traffic_select(bucket_sql: str, time_column: str) -> str:
+    return f"""
+        SELECT node_id, interface_name, {bucket_sql},
+               COALESCE(SUM(rx_bytes), 0), COALESCE(SUM(tx_bytes), 0),
+               CASE WHEN COALESCE(SUM(duration_seconds), 0) > 0
+                    THEN SUM(rx_bytes) * 1.0 / SUM(duration_seconds) END,
+               CASE WHEN COALESCE(SUM(duration_seconds), 0) > 0
+                    THEN SUM(tx_bytes) * 1.0 / SUM(duration_seconds) END,
+               MAX(rx_bps), MAX(tx_bps),
+               COALESCE(SUM(duration_seconds), 0), COUNT(*),
+               NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0
+        FROM traffic_interval
+        WHERE valid = 1 AND rx_bytes IS NOT NULL
+          AND {time_column} >= ? AND {time_column} < ?
+        GROUP BY node_id, interface_name, {bucket_sql}
+    """
+
+
+def _resource_select(bucket_sql: str, time_column: str) -> str:
+    ram = "CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END"
+    disk = "CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END"
+    return f"""
+        SELECT node_id, '*', {bucket_sql},
+               0, 0, NULL, NULL, NULL, NULL, 0, 0,
+               AVG(cpu_percent), MAX(cpu_percent), MIN(cpu_percent),
+               AVG({ram}), MAX({ram}), MAX(ram_total_bytes), AVG(ram_used_bytes),
+               AVG({disk}), MAX({disk}), MAX(disk_total_bytes), AVG(disk_used_bytes),
+               COUNT(*)
+        FROM node_metric_sample
+        WHERE {time_column} >= ? AND {time_column} < ?
+        GROUP BY node_id, {bucket_sql}
+    """
 
 
 def refresh_five_minute(start: datetime, end: datetime) -> int:
@@ -118,180 +143,46 @@ def refresh_five_minute(start: datetime, end: datetime) -> int:
     window_start = max(five_minute_bucket(start), five_minute_bucket(raw_begin))
     if window_start >= end:
         return 0
-    bucket = _five_minute_expr("period_end")
-    traffic_rows = db.execute_sql(
-        f"""
-        SELECT node_id, interface_name, {bucket} AS bucket,
-               SUM(rx_bytes), SUM(tx_bytes), MAX(rx_bps), MAX(tx_bps),
-               SUM(duration_seconds), COUNT(*)
-        FROM traffic_interval
-        WHERE valid = 1 AND rx_bytes IS NOT NULL
-          AND period_end >= ? AND period_end < ?
-        GROUP BY node_id, interface_name, bucket
-        """,
-        (window_start, end),
-    ).fetchall()
+    traffic_bucket = _five_minute_expr("period_end")
     resource_bucket = _five_minute_expr("collected_at")
-    resource_rows = db.execute_sql(
-        f"""
-        SELECT node_id, {resource_bucket} AS bucket,
-               AVG(cpu_percent), MAX(cpu_percent), MIN(cpu_percent),
-               AVG(CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END),
-               MAX(CASE WHEN ram_total_bytes > 0 THEN ram_used_bytes * 100.0 / ram_total_bytes END),
-               MAX(ram_total_bytes), AVG(ram_used_bytes),
-               AVG(CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END),
-               MAX(CASE WHEN disk_total_bytes > 0 THEN disk_used_bytes * 100.0 / disk_total_bytes END),
-               MAX(disk_total_bytes), AVG(disk_used_bytes), COUNT(*)
-        FROM node_metric_sample
-        WHERE collected_at >= ? AND collected_at < ?
-        GROUP BY node_id, bucket
-        """,
-        (window_start, end),
-    ).fetchall()
-    count = 0
-    for node_id, interface_name, bucket_value, rx, tx, rx_max, tx_max, dur, cnt in traffic_rows:
-        duration = float(dur or 0)
-        rx_bytes = int(rx or 0)
-        tx_bytes = int(tx or 0)
-        _upsert_five_minute(
-            node_id,
-            interface_name,
-            _parse_bucket(bucket_value),
-            {
-                "rx_bytes": rx_bytes,
-                "tx_bytes": tx_bytes,
-                "rx_bps_avg": (rx_bytes / duration) if duration else None,
-                "tx_bps_avg": (tx_bytes / duration) if duration else None,
-                "rx_bps_max": rx_max,
-                "tx_bps_max": tx_max,
-                "duration_seconds": duration,
-                "sample_count": int(cnt or 0),
-            },
+    with db.atomic():
+        traffic = _write_aggregate(
+            "traffic_five_minute_aggregate",
+            _traffic_select(traffic_bucket, "period_end"),
+            _TRAFFIC_UPDATE,
+            (window_start, end),
         )
-        count += 1
-    for node_id, bucket_value, cpu_avg, cpu_max, cpu_min, ram_avg, ram_max, ram_total, ram_used, disk_avg, disk_max, disk_total, disk_used, cnt in resource_rows:
-        _upsert_five_minute(
-            node_id,
-            "*",
-            _parse_bucket(bucket_value),
-            {
-                "cpu_avg": cpu_avg,
-                "cpu_max": cpu_max,
-                "cpu_min": cpu_min,
-                "ram_percent_avg": ram_avg,
-                "ram_percent_max": ram_max,
-                "ram_total_bytes": ram_total,
-                "ram_used_avg": ram_used,
-                "disk_percent_avg": disk_avg,
-                "disk_percent_max": disk_max,
-                "disk_total_bytes": disk_total,
-                "disk_used_avg": disk_used,
-                "resource_samples": int(cnt or 0),
-            },
+        resources = _write_aggregate(
+            "traffic_five_minute_aggregate",
+            _resource_select(resource_bucket, "collected_at"),
+            _RESOURCE_UPDATE,
+            (window_start, end),
         )
-        count += 1
-    return count
+    return traffic + resources
 
 
 def refresh_hourly(start: datetime, end: datetime) -> int:
     start = as_utc(start)
     end = as_utc(end)
-    split = retention_split()
-    window_start = max(hour_bucket(start), split)
+    window_start = max(hour_bucket(start), retention_split())
     if window_start >= end:
         return 0
-    bucket = fn.strftime("%Y-%m-%d %H:00:00", TrafficInterval.period_end)
-    traffic_rows = (
-        TrafficInterval.select(
-            TrafficInterval.node,
-            TrafficInterval.interface_name,
-            bucket.alias("bucket"),
-            fn.SUM(TrafficInterval.rx_bytes).alias("rx"),
-            fn.SUM(TrafficInterval.tx_bytes).alias("tx"),
-            fn.MAX(TrafficInterval.rx_bps).alias("rx_max"),
-            fn.MAX(TrafficInterval.tx_bps).alias("tx_max"),
-            fn.SUM(TrafficInterval.duration_seconds).alias("dur"),
-            fn.COUNT(TrafficInterval.id).alias("cnt"),
+    traffic_bucket = "strftime('%Y-%m-%d %H:00:00', period_end)"
+    resource_bucket = "strftime('%Y-%m-%d %H:00:00', collected_at)"
+    with db.atomic():
+        traffic = _write_aggregate(
+            "traffic_hourly_aggregate",
+            _traffic_select(traffic_bucket, "period_end"),
+            _TRAFFIC_UPDATE,
+            (window_start, end),
         )
-        .where(
-            (TrafficInterval.valid == True)  # noqa: E712
-            & (TrafficInterval.period_end >= window_start)
-            & (TrafficInterval.period_end < end)
-            & (TrafficInterval.rx_bytes.is_null(False))
+        resources = _write_aggregate(
+            "traffic_hourly_aggregate",
+            _resource_select(resource_bucket, "collected_at"),
+            _RESOURCE_UPDATE,
+            (window_start, end),
         )
-        .group_by(TrafficInterval.node, TrafficInterval.interface_name, bucket)
-        .dicts()
-    )
-    resource_bucket = fn.strftime("%Y-%m-%d %H:00:00", NodeMetricSample.collected_at)
-    ram_percent = NodeMetricSample.ram_used_bytes * 100.0 / fn.NULLIF(NodeMetricSample.ram_total_bytes, 0)
-    disk_percent = NodeMetricSample.disk_used_bytes * 100.0 / fn.NULLIF(NodeMetricSample.disk_total_bytes, 0)
-    resource_rows = (
-        NodeMetricSample.select(
-            NodeMetricSample.node,
-            resource_bucket.alias("bucket"),
-            fn.AVG(NodeMetricSample.cpu_percent).alias("cpu_avg"),
-            fn.MAX(NodeMetricSample.cpu_percent).alias("cpu_max"),
-            fn.MIN(NodeMetricSample.cpu_percent).alias("cpu_min"),
-            fn.AVG(ram_percent).alias("ram_avg"),
-            fn.MAX(ram_percent).alias("ram_max"),
-            fn.MAX(NodeMetricSample.ram_total_bytes).alias("ram_total"),
-            fn.AVG(NodeMetricSample.ram_used_bytes).alias("ram_used"),
-            fn.AVG(disk_percent).alias("disk_avg"),
-            fn.MAX(disk_percent).alias("disk_max"),
-            fn.MAX(NodeMetricSample.disk_total_bytes).alias("disk_total"),
-            fn.AVG(NodeMetricSample.disk_used_bytes).alias("disk_used"),
-            fn.COUNT(NodeMetricSample.id).alias("cnt"),
-        )
-        .where(
-            (NodeMetricSample.collected_at >= window_start)
-            & (NodeMetricSample.collected_at < end)
-        )
-        .group_by(NodeMetricSample.node, resource_bucket)
-        .dicts()
-    )
-    count = 0
-    for row in traffic_rows:
-        duration = float(row["dur"] or 0)
-        rx = int(row["rx"] or 0)
-        tx = int(row["tx"] or 0)
-        _upsert_hourly(
-            row["node"],
-            row["interface_name"],
-            _parse_bucket(row["bucket"]),
-            {
-                "rx_bytes": rx,
-                "tx_bytes": tx,
-                "rx_bps_avg": (rx / duration) if duration else None,
-                "tx_bps_avg": (tx / duration) if duration else None,
-                "rx_bps_max": row["rx_max"],
-                "tx_bps_max": row["tx_max"],
-                "duration_seconds": duration,
-                "sample_count": int(row["cnt"] or 0),
-            },
-        )
-        count += 1
-    for row in resource_rows:
-        _upsert_hourly(
-            row["node"],
-            "*",
-            _parse_bucket(row["bucket"]),
-            {
-                "cpu_avg": row["cpu_avg"],
-                "cpu_max": row["cpu_max"],
-                "cpu_min": row["cpu_min"],
-                "ram_percent_avg": row["ram_avg"],
-                "ram_percent_max": row["ram_max"],
-                "ram_total_bytes": row["ram_total"],
-                "ram_used_avg": row["ram_used"],
-                "disk_percent_avg": row["disk_avg"],
-                "disk_percent_max": row["disk_max"],
-                "disk_total_bytes": row["disk_total"],
-                "disk_used_avg": row["disk_used"],
-                "resource_samples": int(row["cnt"] or 0),
-            },
-        )
-        count += 1
-    return count
+    return traffic + resources
 
 
 def _weighted(items, value_name: str, weight_name: str):

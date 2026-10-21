@@ -301,6 +301,9 @@ def test_charts_keep_points_outside_the_last_hour(client, admin, monkeypatch):
         nonce_b = f"nonce-hist-b-{hour:04d}"
         assert _ingest(client, node_id, key, start, 1_000_000 + hour * 10_000, 500_000, nonce_a).status_code == 200
         assert _ingest(client, node_id, key, start + timedelta(seconds=30), 1_000_000 + hour * 10_000 + 2_000, 500_000 + 800, nonce_b).status_code == 200
+    from app.services.aggregates import refresh_five_minute
+
+    refresh_five_minute(now - timedelta(hours=13), now + timedelta(minutes=1))
     chart = client.get("/api/v1/charts/traffic?preset=24h&node_ids=" + node_id)
     assert chart.status_code == 200, chart.text
     body = chart.json()["data"]
@@ -342,6 +345,9 @@ def test_chart_points_get_coarser_as_the_range_grows(client, admin, monkeypatch)
     assert _ingest(client, node_id, key, recent + timedelta(seconds=30), 5_400, 0, "nonce-coarse-0006", cpu=40).status_code == 200
     assert _ingest(client, node_id, key, recent + timedelta(minutes=9), 5_400, 0, "nonce-coarse-0007", cpu=15).status_code == 200
     assert _ingest(client, node_id, key, recent + timedelta(minutes=9, seconds=30), 6_000, 0, "nonce-coarse-0008", cpu=55).status_code == 200
+    from app.services.aggregates import refresh_five_minute
+
+    refresh_five_minute(older - timedelta(minutes=5), now + timedelta(minutes=1))
 
     fine = client.get(f"/api/v1/charts/traffic?preset=6h&node_ids={node_id}").json()["data"]
     assert fine["range"]["bucket"] == "720"

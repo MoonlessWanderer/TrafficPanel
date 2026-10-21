@@ -879,8 +879,12 @@ def _finished_slots(origin: datetime, end: datetime, step_seconds: int) -> list[
 
 
 def _refresh_chart(start: datetime, end: datetime) -> None:
-    if start < end:
-        refresh_five_minute(start, end)
+    """فقط دم بازه را تازه می‌کند. نقطه‌های قدیمی را وظیفهٔ دوره‌ای قبلاً ذخیره کرده است."""
+    start = as_utc(start)
+    end = as_utc(end)
+    tail = max(start, end - timedelta(hours=2))
+    if tail < end:
+        refresh_five_minute(tail, end)
 
 
 def _chart_slots(filters: QueryFilters) -> tuple[str, list[datetime], datetime, int]:
